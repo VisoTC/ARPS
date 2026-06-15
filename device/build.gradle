@@ -1,0 +1,107 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.visotc.ARPS'
+    compileSdk 34
+    ndkVersion '27.2.12479018'
+
+    defaultConfig {
+        applicationId 'com.visotc.ARPS'
+        minSdk 31
+        targetSdk 34
+        versionCode 1
+        versionName '0.1.0'
+
+        ndk {
+            abiFilters 'arm64-v8a', 'x86_64'
+        }
+
+        externalNativeBuild {
+            cmake {
+                arguments '-DANDROID_STL=none'
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path file('src/main/cpp/CMakeLists.txt')
+            version '3.22.1'
+        }
+    }
+
+    applicationVariants.configureEach { variant ->
+        variant.outputs.configureEach {
+            outputFileName = 'arps-device.apk'
+        }
+    }
+}
+
+tasks.register('normalizeDebugAppProcessApk') {
+    dependsOn 'packageDebug'
+
+    doLast {
+        File apk = file("${buildDir}/outputs/apk/debug/arps-device.apk")
+        File tmp = file("${buildDir}/outputs/apk/debug/arps-device.normalized.apk")
+        if (!apk.isFile()) {
+            throw new GradleException("APK not found: ${apk}")
+        }
+
+        boolean hasClasses2 = false
+        new java.util.zip.ZipFile(apk).withCloseable { zip ->
+            hasClasses2 = zip.getEntry('classes2.dex') != null
+        }
+        boolean promotedClasses2 = false
+        byte[] buffer = new byte[64 * 1024]
+        tmp.parentFile.mkdirs()
+
+        new java.util.zip.ZipInputStream(new BufferedInputStream(new FileInputStream(apk))).withCloseable { zin ->
+            new java.util.zip.ZipOutputStream(new BufferedOutputStream(new FileOutputStream(tmp))).withCloseable { zout ->
+                java.util.zip.ZipEntry entry
+                while ((entry = zin.nextEntry) != null) {
+                    String name = entry.name
+                    if (hasClasses2 && name == 'classes.dex') {
+                        zin.closeEntry()
+                        continue
+                    }
+
+                    String outputName = name
+                    if (hasClasses2 && name == 'classes2.dex') {
+                        outputName = 'classes.dex'
+                        promotedClasses2 = true
+                    }
+
+                    java.util.zip.ZipEntry outEntry = new java.util.zip.ZipEntry(outputName)
+                    outEntry.time = entry.time
+                    zout.putNextEntry(outEntry)
+                    int read
+                    while ((read = zin.read(buffer)) != -1) {
+                        zout.write(buffer, 0, read)
+                    }
+                    zout.closeEntry()
+                    zin.closeEntry()
+                }
+            }
+        }
+
+        if (hasClasses2 && !promotedClasses2) {
+            tmp.delete()
+            throw new GradleException("classes2.dex was not found; cannot normalize app_process APK")
+        }
+        if (!apk.delete()) {
+            tmp.delete()
+            throw new GradleException("Failed to replace ${apk}")
+        }
+        if (!tmp.renameTo(apk)) {
+            throw new GradleException("Failed to move ${tmp} to ${apk}")
+        }
+    }
+}
+
+afterEvaluate {
+    tasks.named('assembleDebug') {
+        finalizedBy 'normalizeDebugAppProcessApk'
+    }
+}

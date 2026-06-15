@@ -1,0 +1,23 @@
+.DS_Store
+
+# IDE and local machine state
+.idea/
+*.iml
+local.properties
+
+# Gradle and Android build outputs
+.gradle/
+build/
+*/build/
+device/.cxx/
+device/.externalNativeBuild/
+
+# Local debug tools and captured fixtures are kept out of the project baseline.
+host-debug/
+
+# Draft planning docs are not part of the baseline yet.
+docs/project-foundation.md
+docs/raw-argb8888-stream-plan.md
+
+# Reference repositories are local context, not project source.
+references/
