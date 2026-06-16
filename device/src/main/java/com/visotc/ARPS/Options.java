@@ -16,6 +16,7 @@ final class Options {
     boolean keepScreenOn = true;
     CaptureMode captureMode = CaptureMode.AUTO;
     ExitPowerMode exitPowerMode = ExitPowerMode.RESTORE_PREVIOUS;
+    int streamMode = StreamMode.PUSH;
 
     static Options parse(String[] args) {
         Options options = new Options();
@@ -73,6 +74,9 @@ final class Options {
         if (json.has("exit_power_mode")) {
             exitPowerMode = ExitPowerMode.parse(json.optString("exit_power_mode"));
         }
+        if (json.has("stream_mode")) {
+            streamMode = StreamMode.parse(json.optString("stream_mode"));
+        }
         validate();
     }
 
@@ -110,6 +114,9 @@ final class Options {
                 break;
             case "exit-power-mode":
                 exitPowerMode = ExitPowerMode.parse(value);
+                break;
+            case "stream-mode":
+                streamMode = StreamMode.parse(value);
                 break;
             default:
                 throw new IllegalArgumentException("Unknown argument: --" + key);
@@ -162,6 +169,7 @@ final class Options {
                 + "--connect-port=<port> [--connect-host=127.0.0.1] "
                 + "[--compression=raw|lz4_block] [--max-fps=30] "
                 + "[--keep-screen-on=true|false] "
-                + "[--capture-mode=auto|surface|bitmap]";
+                + "[--capture-mode=auto|surface|bitmap] "
+                + "[--stream-mode=push|pull]";
     }
 }

@@ -16,9 +16,11 @@ constexpr std::size_t kFrameBaseLenV1 = 64;
 enum PacketType : std::uint16_t {
     kPacketHello = 1,
     kPacketStart = 2,
-    kPacketFrame = 3,
-    kPacketError = 4,
-    kPacketStop = 5,
+    kPacketReady = 3,
+    kPacketFrameRequest = 4,
+    kPacketFrame = 5,
+    kPacketError = 6,
+    kPacketStop = 7,
 };
 
 enum PixelFormat : std::uint32_t {

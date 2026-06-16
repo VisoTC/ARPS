@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <mutex>
 #include <string>
 
 #include "arps/frame.h"
@@ -20,6 +21,7 @@ struct ArpsStartOptions {
     bool keep_screen_on = true;
     std::string capture_mode = "auto";
     std::string exit_power_mode = "restore_previous";
+    std::string stream_mode = "push";
 
     std::string ToJson() const;
 };
@@ -27,6 +29,7 @@ struct ArpsStartOptions {
 enum class ArpsReadStatus {
     Frame,
     Hello,
+    Ready,
     Error,
     Stop,
     Timeout,
@@ -55,6 +58,7 @@ public:
     bool AcceptOnce(int timeout_ms, std::string* error);
     bool AdoptConnectedSocket(ArpsSocket socket, std::string* error);
     bool SendStart(const ArpsStartOptions& options, std::string* error);
+    bool RequestFrame(std::string* error);
     ArpsReadResult ReadNext(int timeout_ms);
     void Close();
 
@@ -66,6 +70,9 @@ private:
     ArpsSocket client_socket_ = kInvalidArpsSocket;
     std::uint32_t max_packet_len_ = kDefaultMaxPacketLen;
     std::uint32_t next_sequence_ = 1;
+    std::mutex write_mutex_;
+
+    bool SendControlPacket(std::uint16_t type, const std::string& ext, std::string* error);
 
     class Impl;
     Impl* impl_ = nullptr;

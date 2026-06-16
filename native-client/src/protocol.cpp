@@ -8,6 +8,10 @@ const char* PacketTypeName(std::uint16_t type) {
             return "HELLO";
         case kPacketStart:
             return "START";
+        case kPacketReady:
+            return "READY";
+        case kPacketFrameRequest:
+            return "FRAME_REQUEST";
         case kPacketFrame:
             return "FRAME";
         case kPacketError:

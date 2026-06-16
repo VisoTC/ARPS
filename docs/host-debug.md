@@ -36,7 +36,9 @@ host-debug/
 - 监听主机 TCP 地址和端口。
 - 接收设备端或 mock source 的 `HELLO`。
 - 发送 `START` 配置。
-- 持续读取 `FRAME`、`ERROR`、`STOP` 等状态。
+- 等待设备端预热完成后的 `READY`。
+- push 模式持续读取 `FRAME`、`ERROR`、`STOP` 等状态。
+- pull 模式按 `FRAME_REQUEST -> FRAME` 驱动画面刷新。
 - 使用 SDL 展示最新完整帧。
 - 在画面上叠加 fps、frame no、payload 大小、读包/解码/渲染耗时和设备端阶段耗时。
 - 可选通过 adb 自动启动真实设备端。
@@ -106,6 +108,7 @@ host-debug\build-win\Release\arps-host-debug.exe `
 - `--turn-screen-off=true|false`
 - `--keep-screen-on=true|false`
 - `--capture-mode=auto|surface|bitmap`
+- `--stream-mode=push|pull`
 - `--exit-power-mode=restore_previous|keep_on|turn_off`
 - `--serial=<adb-serial>`
 - `--apk=<path>`
@@ -114,8 +117,8 @@ host-debug\build-win\Release\arps-host-debug.exe `
 ## `host-debug/mock-source`
 
 `host-debug/mock-source` 是 C++ 合成帧源，用来模拟设备端。它主动连接主机调试 CLI，
-发送 `HELLO`，读取 `START`，然后按 ARPS 协议推送渐变背景和移动色块组成的 synthetic
-frames。
+发送 `HELLO`，读取 `START`，发送 `READY`，然后按 ARPS 协议推送或按请求返回渐变背景
+和移动色块组成的 synthetic frames。
 
 用途：
 
@@ -147,7 +150,7 @@ host-debug/mock-source/build/arps-mock-source \
 ```
 
 `mock-source` 支持 `raw` 和 `lz4_block`，实际压缩方式由主机 `START` 中的
-`compression` 决定。
+`compression` 决定；`stream_mode=pull` 时会等待 `FRAME_REQUEST` 后再发送下一帧。
 
 ## `host-debug/minirecv`
 
@@ -159,7 +162,9 @@ host-debug/mock-source/build/arps-mock-source \
 - 监听 TCP 端口。
 - 读取并打印 `HELLO`。
 - 发送 `START`。
-- 读取指定数量的 `FRAME`。
+- 等待并打印 `READY`。
+- push 模式读取指定数量的 `FRAME`。
+- pull 模式逐次发送 `FRAME_REQUEST` 并读取对应 `FRAME`。
 - 打印 `FRAME BaseData` 元数据和 `ExtData`。
 - 可选保存最后一个压缩 payload。
 
@@ -169,7 +174,8 @@ host-debug/mock-source/build/arps-mock-source \
 python3 host-debug/minirecv/arps_minirecv.py \
   --port 27183 \
   --frames 1 \
-  --compression lz4_block
+  --compression lz4_block \
+  --stream-mode pull
 ```
 
 配合真实设备：

@@ -50,6 +50,12 @@ struct Packet {
     std::string ext;
 };
 
+struct PreparedFrame {
+    std::uint32_t compression_type = arps::kCompressionRaw;
+    double capture_ms = -1.0;
+    double compress_ms = -1.0;
+};
+
 void WriteBe16(std::vector<std::uint8_t>& out, std::uint16_t value) {
     out.push_back(static_cast<std::uint8_t>((value >> 8) & 0xff));
     out.push_back(static_cast<std::uint8_t>(value & 0xff));
@@ -329,7 +335,8 @@ std::vector<std::uint8_t> BuildHello(std::uint32_t sequence) {
             "\"model\":\"synthetic\",\"android_sdk\":35,\"android_release\":\"mock\"},"
             "\"capabilities\":{\"pixel_formats\":[\"argb8888\"],"
             "\"compressions\":[\"raw\",\"lz4_block\"],\"screen_power\":false,"
-            "\"max_packet_len\":67108864,\"native_lz4\":true}}";
+            "\"max_packet_len\":67108864,\"native_lz4\":true,"
+            "\"stream_modes\":[\"push\",\"pull\"]}}";
     return BuildPacket(arps::kPacketHello, {}, {}, ext, sequence);
 }
 
@@ -386,6 +393,46 @@ std::string FrameExt(double capture_ms, double compress_ms, double previous_writ
     return out.str();
 }
 
+std::string ReadyExt(const std::string& stream_mode, const std::string& compression,
+        const PreparedFrame& frame) {
+    std::ostringstream out;
+    out << "{\"stream_mode\":\"" << stream_mode << "\","
+        << "\"compression\":\"" << compression << "\","
+        << "\"capture_api\":\"host-debug.mock-source\","
+        << "\"capture_ms\":" << frame.capture_ms << ","
+        << "\"copy_ms\":0,"
+        << "\"compress_ms\":" << frame.compress_ms << "}";
+    return out.str();
+}
+
+bool PrepareFrame(const Args& args, const std::string& compression, std::uint64_t frame_no,
+        std::vector<std::uint8_t>* raw, std::vector<std::uint8_t>* payload,
+        PreparedFrame* prepared) {
+    auto frame_start = std::chrono::steady_clock::now();
+    GenerateFrame(args.width, args.height, frame_no, raw);
+    prepared->capture_ms = MsSince(frame_start);
+
+    auto compress_start = std::chrono::steady_clock::now();
+    prepared->compression_type = arps::kCompressionRaw;
+    if (compression == "lz4_block") {
+        payload->assign(static_cast<std::size_t>(LZ4_compressBound(IntSize(raw->size()))),
+                0);
+        int written = LZ4_compress_default(reinterpret_cast<const char*>(raw->data()),
+                reinterpret_cast<char*>(payload->data()), IntSize(raw->size()),
+                IntSize(payload->size()));
+        if (written <= 0) {
+            std::cerr << "LZ4 compression failed\n";
+            return false;
+        }
+        payload->resize(static_cast<std::size_t>(written));
+        prepared->compression_type = arps::kCompressionLz4Block;
+    } else {
+        *payload = *raw;
+    }
+    prepared->compress_ms = MsSince(compress_start);
+    return true;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -416,6 +463,7 @@ int main(int argc, char** argv) {
         return 1;
     }
     std::string compression = JsonString(start.ext, "compression", "lz4_block");
+    std::string stream_mode = JsonString(start.ext, "stream_mode", "push");
     std::uint32_t start_fps = JsonU32(start.ext, "max_fps", args.fps);
     std::uint32_t fps = args.fps;
     if (start_fps > 0) {
@@ -426,45 +474,61 @@ int main(int argc, char** argv) {
         sockets::Close(socket);
         return 1;
     }
+    if (stream_mode != "push" && stream_mode != "pull") {
+        std::cerr << "Unsupported START stream_mode: " << stream_mode << "\n";
+        sockets::Close(socket);
+        return 1;
+    }
     std::cout << "START " << start.ext << "\n";
     std::cout << "Streaming " << args.width << "x" << args.height << " "
-              << compression << " at " << fps << " fps\n";
+              << compression << " mode=" << stream_mode << " at " << fps << " fps\n";
 
     std::vector<std::uint8_t> raw;
     std::vector<std::uint8_t> payload;
+    PreparedFrame prepared;
+    if (!PrepareFrame(args, compression, 0, &raw, &payload, &prepared)) {
+        sockets::Close(socket);
+        return 1;
+    }
+    if (!SendAll(socket, BuildPacket(arps::kPacketReady, {}, {},
+                ReadyExt(stream_mode, compression, prepared), sequence++), &error)) {
+        std::cerr << "Send READY failed: " << error << "\n";
+        sockets::Close(socket);
+        return 1;
+    }
+
     double previous_write_ms = -1.0;
     auto frame_interval = fps > 0 ? std::chrono::nanoseconds(1000000000ull / fps)
                                   : std::chrono::nanoseconds(0);
     std::uint64_t frame_no = 0;
     while (args.frames == 0 || frame_no < args.frames) {
         auto frame_start = std::chrono::steady_clock::now();
-        frame_no++;
-        GenerateFrame(args.width, args.height, frame_no, &raw);
-        double capture_ms = MsSince(frame_start);
-
-        auto compress_start = std::chrono::steady_clock::now();
-        std::uint32_t compression_type = arps::kCompressionRaw;
-        if (compression == "lz4_block") {
-            payload.assign(static_cast<std::size_t>(LZ4_compressBound(IntSize(raw.size()))),
-                    0);
-            int written = LZ4_compress_default(reinterpret_cast<const char*>(raw.data()),
-                    reinterpret_cast<char*>(payload.data()), IntSize(raw.size()),
-                    IntSize(payload.size()));
-            if (written <= 0) {
-                std::cerr << "LZ4 compression failed\n";
+        if (stream_mode == "pull") {
+            Packet request;
+            if (!ReadPacket(socket, &request, &error)) {
+                std::cerr << "Read FRAME_REQUEST failed: " << error << "\n";
                 sockets::Close(socket);
                 return 1;
             }
-            payload.resize(static_cast<std::size_t>(written));
-            compression_type = arps::kCompressionLz4Block;
-        } else {
-            payload = raw;
+            if (request.type == arps::kPacketStop) {
+                break;
+            }
+            if (request.type != arps::kPacketFrameRequest) {
+                std::cerr << "Expected FRAME_REQUEST, got type=" << request.type << "\n";
+                sockets::Close(socket);
+                return 1;
+            }
         }
-        double compress_ms = MsSince(compress_start);
+        frame_no++;
+        if (!PrepareFrame(args, compression, frame_no, &raw, &payload, &prepared)) {
+            sockets::Close(socket);
+            return 1;
+        }
 
         std::vector<std::uint8_t> base = BuildFrameBase(frame_no, args.width, args.height,
-                compression_type, U32Size(raw.size()), U32Size(payload.size()));
-        std::string ext = FrameExt(capture_ms, compress_ms, previous_write_ms);
+                prepared.compression_type, U32Size(raw.size()), U32Size(payload.size()));
+        std::string ext = FrameExt(prepared.capture_ms, prepared.compress_ms,
+                previous_write_ms);
         std::vector<std::uint8_t> packet = BuildPacket(arps::kPacketFrame, base, payload, ext,
                 sequence++);
 
@@ -480,7 +544,7 @@ int main(int argc, char** argv) {
             std::cout << "sent frame " << frame_no << " payload=" << payload.size() << "\n";
         }
 
-        if (frame_interval.count() > 0) {
+        if (stream_mode == "push" && frame_interval.count() > 0) {
             auto elapsed = std::chrono::steady_clock::now() - frame_start;
             if (elapsed < frame_interval) {
                 std::this_thread::sleep_for(frame_interval - elapsed);

@@ -68,7 +68,7 @@ final class ArpsClient {
                 powerController.acquireWakeLock(options.displayId);
             }
 
-            streamFrames();
+            streamFrames(reader);
             if (!stopRequested && writer != null) {
                 writer.writeJson(Protocol.TYPE_STOP, stopJson("normal_stop"));
             }
@@ -102,48 +102,84 @@ final class ArpsClient {
         Log.i("Connected to " + options.connectHost + ":" + options.connectPort);
     }
 
-    private void streamFrames() throws Exception {
+    private void streamFrames(ProtocolReader reader) throws Exception {
         ScreenCapturer capturer = new ScreenCapturer(options.captureMode);
-        long frameNo = 0;
-        boolean displayPowerOff = false;
-        long frameIntervalNs = options.maxFps > 0 ? NANOS_PER_SECOND / options.maxFps : 0;
+        StreamState state = new StreamState();
 
         try {
-            while (!stopRequested) {
-                long loopStartNs = SystemClock.elapsedRealtimeNanos();
-                CapturedFrame frame = capturer.capture(options.displayId);
-                long compressStartNs = SystemClock.elapsedRealtimeNanos();
+            PreparedFrame warmup = captureAndCompress(capturer);
+            writer.writeJson(Protocol.TYPE_READY, readyJson(warmup));
+            Log.i("READY stream_mode=" + StreamMode.nameOf(options.streamMode)
+                    + " warmup_capture_ms=" + warmup.frame.captureMs
+                    + " warmup_compress_ms=" + warmup.compressMs);
 
-                byte[] payload;
-                if (options.compressionType == CompressionType.RAW) {
-                    payload = frame.raw;
-                } else if (options.compressionType == CompressionType.LZ4_BLOCK) {
-                    payload = Lz4.compress(frame.raw, frame.raw.length);
-                } else {
-                    throw new IOException("Unsupported compression_type=" + options.compressionType);
-                }
-
-                long compressEndNs = SystemClock.elapsedRealtimeNanos();
-                frameNo++;
-                writer.writeFrame(frame, payload, options.compressionType, frameNo,
-                        nanosToMillis(compressEndNs - compressStartNs));
-
-                if (!displayPowerOff && options.turnScreenOff) {
-                    displayPowerOff = powerController.setDisplayPower(options.displayId, false);
-                    Log.i("setDisplayPower(false) result=" + displayPowerOff);
-                }
-
-                if (frameIntervalNs > 0) {
-                    long elapsedNs = SystemClock.elapsedRealtimeNanos() - loopStartNs;
-                    long remainingNs = frameIntervalNs - elapsedNs;
-                    if (remainingNs > 0) {
-                        SystemClock.sleep(remainingNs / 1000000L);
-                    }
-                }
+            if (options.streamMode == StreamMode.PULL) {
+                streamPullFrames(reader, capturer, state);
+            } else {
+                streamPushFrames(capturer, state);
             }
         } finally {
             capturer.close();
         }
+    }
+
+    private void streamPushFrames(ScreenCapturer capturer, StreamState state) throws Exception {
+        long frameIntervalNs = options.maxFps > 0 ? NANOS_PER_SECOND / options.maxFps : 0;
+        while (!stopRequested) {
+            long loopStartNs = SystemClock.elapsedRealtimeNanos();
+            writeNextFrame(capturer, state);
+
+            if (frameIntervalNs > 0) {
+                long elapsedNs = SystemClock.elapsedRealtimeNanos() - loopStartNs;
+                long remainingNs = frameIntervalNs - elapsedNs;
+                if (remainingNs > 0) {
+                    SystemClock.sleep(remainingNs / 1000000L);
+                }
+            }
+        }
+    }
+
+    private void streamPullFrames(ProtocolReader reader, ScreenCapturer capturer,
+            StreamState state) throws Exception {
+        while (!stopRequested) {
+            ProtocolReader.Packet request = reader.readPacket(options.maxPacketLen);
+            if (request.type == Protocol.TYPE_FRAME_REQUEST) {
+                writeNextFrame(capturer, state);
+            } else if (request.type == Protocol.TYPE_STOP) {
+                stopRequested = true;
+            } else {
+                throw new IOException("Expected FRAME_REQUEST packet, got type=" + request.type);
+            }
+        }
+    }
+
+    private void writeNextFrame(ScreenCapturer capturer, StreamState state) throws Exception {
+        PreparedFrame prepared = captureAndCompress(capturer);
+        state.frameNo++;
+        writer.writeFrame(prepared.frame, prepared.payload, options.compressionType,
+                state.frameNo, prepared.compressMs);
+
+        if (!state.displayPowerOff && options.turnScreenOff) {
+            state.displayPowerOff = powerController.setDisplayPower(options.displayId, false);
+            Log.i("setDisplayPower(false) result=" + state.displayPowerOff);
+        }
+    }
+
+    private PreparedFrame captureAndCompress(ScreenCapturer capturer) throws Exception {
+        CapturedFrame frame = capturer.capture(options.displayId);
+        long compressStartNs = SystemClock.elapsedRealtimeNanos();
+
+        byte[] payload;
+        if (options.compressionType == CompressionType.RAW) {
+            payload = frame.raw;
+        } else if (options.compressionType == CompressionType.LZ4_BLOCK) {
+            payload = Lz4.compress(frame.raw, frame.raw.length);
+        } else {
+            throw new IOException("Unsupported compression_type=" + options.compressionType);
+        }
+
+        long compressEndNs = SystemClock.elapsedRealtimeNanos();
+        return new PreparedFrame(frame, payload, nanosToMillis(compressEndNs - compressStartNs));
     }
 
     private JSONObject buildHello() throws Exception {
@@ -162,8 +198,20 @@ final class ArpsClient {
         capabilities.put("screen_power", true);
         capabilities.put("max_packet_len", options.maxPacketLen);
         capabilities.put("native_lz4", true);
+        capabilities.put("stream_modes", new JSONArray().put("push").put("pull"));
         root.put("capabilities", capabilities);
         return root;
+    }
+
+    private JSONObject readyJson(PreparedFrame warmup) throws Exception {
+        JSONObject json = new JSONObject();
+        json.put("stream_mode", StreamMode.nameOf(options.streamMode));
+        json.put("compression", CompressionType.nameOf(options.compressionType));
+        json.put("capture_api", warmup.frame.captureApi);
+        json.put("capture_ms", warmup.frame.captureMs);
+        json.put("copy_ms", warmup.frame.copyMs);
+        json.put("compress_ms", warmup.compressMs);
+        return json;
     }
 
     private JSONObject stopJson(String reason) throws Exception {
@@ -229,5 +277,22 @@ final class ArpsClient {
             current = current.getCause();
         }
         return false;
+    }
+
+    private static final class PreparedFrame {
+        final CapturedFrame frame;
+        final byte[] payload;
+        final double compressMs;
+
+        PreparedFrame(CapturedFrame frame, byte[] payload, double compressMs) {
+            this.frame = frame;
+            this.payload = payload;
+            this.compressMs = compressMs;
+        }
+    }
+
+    private static final class StreamState {
+        long frameNo;
+        boolean displayPowerOff;
     }
 }

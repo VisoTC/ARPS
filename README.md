@@ -47,7 +47,9 @@ host adb reverse tcp:<port> tcp:<port>
 device connect 127.0.0.1:<port>
 device -> HELLO
 host   -> START
-device -> FRAME...
+device -> READY
+push: device -> FRAME...
+pull: host -> FRAME_REQUEST, device -> FRAME
 host closes socket or device sends STOP/ERROR
 ```
 
@@ -119,7 +121,8 @@ host-debug/cli/build/arps-host-debug \
 
 常用参数：`--host` `--port` `--compression=raw|lz4_block` `--max-fps` `--display-id`
 `--turn-screen-off` `--keep-screen-on` `--capture-mode=auto|surface|bitmap`
-`--exit-power-mode=restore_previous|keep_on|turn_off` `--serial` `--apk` `--adb`。
+`--stream-mode=push|pull` `--exit-power-mode=restore_previous|keep_on|turn_off`
+`--serial` `--apk` `--adb`。
 
 ### 无设备验证主机链路（mock-source）
 
@@ -138,7 +141,7 @@ host-debug/mock-source/build/arps-mock-source \
 
 ```bash
 python3 host-debug/minirecv/arps_minirecv.py \
-  --port 27183 --frames 1 --compression lz4_block
+  --port 27183 --frames 1 --compression lz4_block --stream-mode pull
 ```
 
 ## 协议 v1（概要）
@@ -157,9 +160,9 @@ default_max_len  = 64 MiB
 每个包由 32 字节 `FixedHeader` 和长度受控的 body 组成，body 依次为
 `base_len + BaseData + bitmap_len + BitmapPayload + ext_len + ExtData + UnknownTail`。
 
-包类型：`1=HELLO` `2=START` `3=FRAME` `4=ERROR` `5=STOP`。控制包以 UTF-8 JSON 承载在
-`ExtData`；`FRAME` 在 64 字节定长 `BaseData` 中携带帧元数据，`BitmapPayload` 为
-`raw` 或 `lz4_block` 压缩像素。
+包类型：`1=HELLO` `2=START` `3=READY` `4=FRAME_REQUEST` `5=FRAME`
+`6=ERROR` `7=STOP`。控制包以 UTF-8 JSON 承载在 `ExtData`；`FRAME` 在 64 字节
+定长 `BaseData` 中携带帧元数据，`BitmapPayload` 为 `raw` 或 `lz4_block` 压缩像素。
 
 像素约定：每像素 4 字节，内存顺序按 `R, G, B, A` 解释；行寻址必须使用 `row_bytes`，
 不得假设等于 `width * 4`。协议层不做通道转换。
@@ -188,7 +191,9 @@ ARPS 的实现离不开以下两个开源项目，在此致谢：
 
 - `FLAG_SECURE` / DRM 保护内容可能被系统截成黑帧。
 - 熄屏采集能力受设备厂商、Android 版本和系统策略影响，以真机结果为准。
-- 主机读慢时 TCP 链路会产生队头阻塞，当前通过串行 `capture -> compress -> write` 避免设备端无界排队。
+- push 模式下主机读慢时 TCP 链路会产生队头阻塞，当前通过串行
+  `capture -> compress -> write` 避免设备端无界排队；pull 模式下由
+  `FRAME_REQUEST` 显式驱动一请求一帧。
 - `monotonic_time_ns` 属于设备时钟域，不能直接计算主机端到端延迟。
 
 ## 许可证

@@ -10,9 +10,11 @@ final class Protocol {
 
     static final int TYPE_HELLO = 1;
     static final int TYPE_START = 2;
-    static final int TYPE_FRAME = 3;
-    static final int TYPE_ERROR = 4;
-    static final int TYPE_STOP = 5;
+    static final int TYPE_READY = 3;
+    static final int TYPE_FRAME_REQUEST = 4;
+    static final int TYPE_FRAME = 5;
+    static final int TYPE_ERROR = 6;
+    static final int TYPE_STOP = 7;
 
     static final int PIXEL_FORMAT_ANDROID_ARGB_8888_RAW = 1;
 

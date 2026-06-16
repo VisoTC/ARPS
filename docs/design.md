@@ -85,8 +85,10 @@ Wrapper 不是构建产物。它固定构建入口和 Gradle 版本，使 Orb De
 4. 发送 `HELLO`。
 5. 等待主机 `START`。
 6. 按启动参数处理屏幕电源状态。
-7. 采集、压缩并发送 `FRAME`。
-8. 连接关闭、写失败或收到停止请求后清理退出。
+7. 执行一次采集和压缩预热，丢弃预热帧。
+8. 发送 `READY`。
+9. 根据 `stream_mode` 连续发送 `FRAME`，或等待 `FRAME_REQUEST` 后发送一帧。
+10. 连接关闭、写失败或收到停止请求后清理退出。
 
 设备端只负责采集、压缩、封包和屏幕电源处理。它不提供 UI，不持有业务状态，也不把
 自动化框架概念带入设备进程。
@@ -97,6 +99,8 @@ Wrapper 不是构建产物。它固定构建入口和 Gradle 版本，使 Orb De
 
 - 监听或接管已连接 socket。
 - 发送 `START` 配置。
+- 等待设备端 `READY`。
+- 在 pull 模式下发送 `FRAME_REQUEST`。
 - 读取 ARPS packet。
 - 校验协议字段。
 - 解压 `raw` 或 `lz4_block` payload。
@@ -116,13 +120,17 @@ host adb reverse tcp:<port> tcp:<port>
 device connect 127.0.0.1:<port>
 device -> HELLO
 host   -> START
-device -> FRAME...
+device warmup capture/compress discard
+device -> READY
+push: device -> FRAME...
+pull: host -> FRAME_REQUEST, device -> FRAME
 host closes socket or device sends STOP/ERROR
 ```
 
-TCP 提供有序可靠字节流，但它不表达“只要最新帧”的语义。ARPS 当前采取串行
-`capture -> compress -> write` 模型：写阻塞时设备端不会继续无限制捕获新帧，从而
-避免内存队列堆积。上层如果只关心最新画面，可以在收到完整帧后自行丢弃过时帧。
+TCP 提供有序可靠字节流。push 模式采取串行 `capture -> compress -> write` 模型：
+写阻塞时设备端不会继续无限制捕获新帧，从而避免内存队列堆积。`max_fps > 0` 只在
+push 模式下节流，`max_fps = 0` 表示不 sleep、尽快连续推帧。pull 模式由主机显式
+发送 `FRAME_REQUEST`，设备端每收到一次请求只采集、压缩并发送一帧。
 
 ## 屏幕电源策略
 
@@ -224,16 +232,18 @@ offset  size  field
 ```text
 1 = HELLO
 2 = START
-3 = FRAME
-4 = ERROR
-5 = STOP
+3 = READY
+4 = FRAME_REQUEST
+5 = FRAME
+6 = ERROR
+7 = STOP
 ```
 
 未知 `packet_type` 应作为协议错误处理。
 
 ### Control Packets
 
-`HELLO`、`START`、`ERROR`、`STOP` 都使用同一包结构：
+`HELLO`、`START`、`READY`、`FRAME_REQUEST`、`ERROR`、`STOP` 都使用同一包结构：
 
 ```text
 base_len   = 0
@@ -258,12 +268,14 @@ ExtData    = UTF-8 JSON
     "compressions": ["raw", "lz4_block"],
     "screen_power": true,
     "max_packet_len": 67108864,
-    "native_lz4": true
+    "native_lz4": true,
+    "stream_modes": ["push", "pull"]
   }
 }
 ```
 
-`START` 由主机端发送，设备端收到后开始采集。
+`START` 由主机端发送，设备端收到后先完成预热，再进入指定流模式。`stream_mode`
+缺省为 `push`。`max_fps` 只在 push 模式下节流；pull 模式忽略它。
 
 ```json
 {
@@ -276,7 +288,30 @@ ExtData    = UTF-8 JSON
   "turn_screen_off": false,
   "keep_screen_on": true,
   "capture_mode": "auto",
-  "exit_power_mode": "restore_previous"
+  "exit_power_mode": "restore_previous",
+  "stream_mode": "pull"
+}
+```
+
+`READY` 由设备端在预热完成后发送。它不携带图像 payload，只表示后续可以开始读取
+push 帧或发送 pull 请求。
+
+```json
+{
+  "stream_mode": "pull",
+  "compression": "lz4_block",
+  "capture_api": "android.media.ImageReader+SurfaceControl",
+  "capture_ms": 18.42,
+  "copy_ms": 2.11,
+  "compress_ms": 4.36
+}
+```
+
+`FRAME_REQUEST` 由主机端在 pull 模式发送。设备端每收到一个请求，只发送一个
+`FRAME`。
+
+```json
+{
 }
 ```
 
@@ -378,8 +413,8 @@ offset  size  field
 - `lz4_block` 解压成功，且输出长度等于 `uncompressed_len`。
 
 控制包应作为状态返回给调用方，而不是静默丢弃。当前 C++ 接口使用
-`ArpsReadStatus` 区分 `Frame`、`Hello`、`Error`、`Stop`、`Timeout`、`Closed` 和
-`ProtocolError`。
+`ArpsReadStatus` 区分 `Frame`、`Hello`、`Ready`、`Error`、`Stop`、`Timeout`、
+`Closed` 和 `ProtocolError`。
 
 ## 兼容性规则
 

@@ -377,6 +377,8 @@ public:
         switch (packet.type) {
             case kPacketHello:
                 return StatusResult(ArpsReadStatus::Hello, packet);
+            case kPacketReady:
+                return StatusResult(ArpsReadStatus::Ready, packet);
             case kPacketError:
                 return StatusResult(ArpsReadStatus::Error, packet);
             case kPacketStop:
@@ -475,7 +477,8 @@ std::string ArpsStartOptions::ToJson() const {
         << "\"turn_screen_off\":" << (turn_screen_off ? "true" : "false") << ","
         << "\"keep_screen_on\":" << (keep_screen_on ? "true" : "false") << ","
         << "\"capture_mode\":\"" << capture_mode << "\","
-        << "\"exit_power_mode\":\"" << exit_power_mode << "\""
+        << "\"exit_power_mode\":\"" << exit_power_mode << "\","
+        << "\"stream_mode\":\"" << stream_mode << "\""
         << "}";
     return out.str();
 }
@@ -549,20 +552,29 @@ bool ArpsReceiver::AdoptConnectedSocket(ArpsSocket socket, std::string* error) {
 }
 
 bool ArpsReceiver::SendStart(const ArpsStartOptions& options, std::string* error) {
+    max_packet_len_ = options.max_packet_len;
+    return SendControlPacket(kPacketStart, options.ToJson(), error);
+}
+
+bool ArpsReceiver::RequestFrame(std::string* error) {
+    return SendControlPacket(kPacketFrameRequest, "{}", error);
+}
+
+bool ArpsReceiver::SendControlPacket(std::uint16_t type, const std::string& ext,
+        std::string* error) {
     if (sockets::IsInvalid(client_socket_)) {
         if (error) {
             *error = "no connected client";
         }
         return false;
     }
-    max_packet_len_ = options.max_packet_len;
-    std::string ext = options.ToJson();
+    std::lock_guard<std::mutex> lock(write_mutex_);
     std::vector<std::uint8_t> packet;
     std::uint32_t packet_len = 4 + 0 + 4 + 0 + 4 + static_cast<std::uint32_t>(ext.size());
     packet.insert(packet.end(), kMagic, kMagic + kMagicSize);
     WriteBe16(packet, kProtocolMajor);
     WriteBe16(packet, kProtocolMinor);
-    WriteBe16(packet, kPacketStart);
+    WriteBe16(packet, type);
     WriteBe16(packet, kHeaderLen);
     WriteBe32(packet, 0);
     WriteBe32(packet, next_sequence_++);

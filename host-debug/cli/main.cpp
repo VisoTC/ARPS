@@ -44,6 +44,7 @@ struct Args {
     bool keep_screen_on = true;
     std::string capture_mode = "auto";
     std::string exit_power_mode = "restore_previous";
+    std::string stream_mode = "push";
     std::string serial;
     std::string adb = "adb";
     std::string apk;
@@ -103,6 +104,7 @@ void PrintUsage(const char* argv0) {
             << "       [--display-id=0] [--turn-screen-off=true|false]\n"
             << "       [--keep-screen-on=true|false]\n"
             << "       [--capture-mode=auto|surface|bitmap]\n"
+            << "       [--stream-mode=push|pull]\n"
             << "       [--exit-power-mode=restore_previous|keep_on|turn_off]\n"
             << "       [--serial=<adb-serial>] [--apk=<path>] [--adb=adb]\n";
 }
@@ -167,6 +169,12 @@ bool ParseArgs(int argc, char** argv, Args* args) {
                 return false;
             }
             args->exit_power_mode = value;
+        } else if (key == "stream-mode") {
+            if (value != "push" && value != "pull") {
+                std::cerr << "Invalid --stream-mode\n";
+                return false;
+            }
+            args->stream_mode = value;
         } else if (key == "serial") {
             args->serial = value;
         } else if (key == "adb") {
@@ -415,6 +423,7 @@ std::vector<std::string> BuildDeviceCommand(const Args& args) {
           << " app_process / com.visotc.ARPS.Main"
           << " --connect-host=127.0.0.1"
           << " --connect-port=" << args.port;
+    shell << " --stream-mode=" << args.stream_mode;
 
     std::vector<std::string> command = AdbArgs(args);
     command.push_back("shell");
@@ -645,7 +654,7 @@ bool PumpEvents(bool* running) {
     return *running;
 }
 
-int RunGui(arps::ArpsReceiver* receiver) {
+int RunGui(arps::ArpsReceiver* receiver, bool pull_mode) {
     SDL_SetMainReady();
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0) {
         std::cerr << "SDL_Init failed: " << SDL_GetError() << "\n";
@@ -675,8 +684,19 @@ int RunGui(arps::ArpsReceiver* receiver) {
     int texture_w = 0;
     int texture_h = 0;
     Stats stats;
-    stats.state = "STREAMING";
+    stats.state = pull_mode ? "PULL" : "STREAMING";
     bool running = true;
+
+    if (pull_mode) {
+        std::string error;
+        if (!receiver->RequestFrame(&error)) {
+            std::cerr << "FRAME_REQUEST failed: " << error << "\n";
+            SDL_DestroyRenderer(renderer);
+            SDL_DestroyWindow(window);
+            SDL_Quit();
+            return 1;
+        }
+    }
 
     while (running) {
         PumpEvents(&running);
@@ -707,8 +727,18 @@ int RunGui(arps::ArpsReceiver* receiver) {
             stats.packet_read_ms = frame.packet_read_ms;
             stats.decode_ms = frame.decode_ms;
             stats.device_timings = frame.device_timings;
-            stats.state = "STREAMING";
+            stats.state = pull_mode ? "PULL" : "STREAMING";
             UpdateFps(&stats);
+            if (pull_mode) {
+                std::string error;
+                if (!receiver->RequestFrame(&error)) {
+                    std::cerr << "FRAME_REQUEST failed: " << error << "\n";
+                    stats.state = "REQ ERR";
+                    running = false;
+                }
+            }
+        } else if (result.status == arps::ArpsReadStatus::Ready) {
+            stats.state = pull_mode ? "PULL" : "STREAMING";
         } else if (result.status == arps::ArpsReadStatus::Timeout) {
             // Keep rendering the latest complete frame.
         } else if (result.status == arps::ArpsReadStatus::Error) {
@@ -822,6 +852,7 @@ int main(int argc, char** argv) {
     start.keep_screen_on = args.keep_screen_on;
     start.capture_mode = args.capture_mode;
     start.exit_power_mode = args.exit_power_mode;
+    start.stream_mode = args.stream_mode;
     if (!receiver.SendStart(start, &error)) {
         std::cerr << "Send START failed: " << error << "\n";
         RemoveReverse(args);
@@ -832,7 +863,24 @@ int main(int argc, char** argv) {
     }
     std::cout << "START " << start.ToJson() << "\n";
 
-    int rc = RunGui(&receiver);
+    arps::ArpsReadResult ready = receiver.ReadNext(30000);
+    if (ready.status != arps::ArpsReadStatus::Ready) {
+        std::cerr << "Expected READY, got status=" << static_cast<int>(ready.status)
+                  << " message=" << ready.message;
+        if (!ready.json.empty()) {
+            std::cerr << " json=" << ready.json;
+        }
+        std::cerr << "\n";
+        receiver.Close();
+        RemoveReverse(args);
+        if (device_thread.joinable()) {
+            device_thread.join();
+        }
+        return 1;
+    }
+    std::cout << "READY " << ready.json << "\n";
+
+    int rc = RunGui(&receiver, args.stream_mode == "pull");
     receiver.Close();
     RemoveReverse(args);
     if (device_thread.joinable()) {

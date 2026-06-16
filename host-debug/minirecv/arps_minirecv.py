@@ -13,9 +13,11 @@ FRAME_BASE = struct.Struct(">QQIIIIIIIIIIII")
 
 TYPE_HELLO = 1
 TYPE_START = 2
-TYPE_FRAME = 3
-TYPE_ERROR = 4
-TYPE_STOP = 5
+TYPE_READY = 3
+TYPE_FRAME_REQUEST = 4
+TYPE_FRAME = 5
+TYPE_ERROR = 6
+TYPE_STOP = 7
 
 
 def read_exact(sock, length):
@@ -118,6 +120,7 @@ def main():
     parser.add_argument("--port", type=int, default=27183)
     parser.add_argument("--frames", type=int, default=1)
     parser.add_argument("--compression", choices=["raw", "lz4_block"], default="lz4_block")
+    parser.add_argument("--stream-mode", choices=["push", "pull"], default="push")
     parser.add_argument("--save-payload")
     args = parser.parse_args()
 
@@ -132,6 +135,7 @@ def main():
         "turn_screen_off": False,
         "keep_screen_on": True,
         "exit_power_mode": "restore_previous",
+        "stream_mode": args.stream_mode,
     }
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
@@ -147,10 +151,22 @@ def main():
             if hello["type"] != TYPE_HELLO:
                 raise ValueError(f"expected HELLO, got type={hello['type']}")
             print("HELLO", hello["ext"].decode("utf-8", "replace"))
-            write_packet(conn, TYPE_START, ext=json.dumps(start).encode("utf-8"), sequence=1)
+            sequence = 1
+            write_packet(conn, TYPE_START, ext=json.dumps(start).encode("utf-8"), sequence=sequence)
+            sequence += 1
+
+            ready = read_packet(conn, max_packet_len)
+            if ready["type"] == TYPE_ERROR:
+                raise ValueError(f"device ERROR before READY: {ready['ext'].decode('utf-8', 'replace')}")
+            if ready["type"] != TYPE_READY:
+                raise ValueError(f"expected READY, got type={ready['type']}")
+            print("READY", ready["ext"].decode("utf-8", "replace"))
 
             last_payload = None
             for _ in range(args.frames):
+                if args.stream_mode == "pull":
+                    write_packet(conn, TYPE_FRAME_REQUEST, ext=b"{}", sequence=sequence)
+                    sequence += 1
                 packet = read_packet(conn, max_packet_len)
                 if packet["type"] == TYPE_ERROR:
                     print("ERROR", packet["ext"].decode("utf-8", "replace"))
