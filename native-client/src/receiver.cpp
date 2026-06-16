@@ -1,20 +1,14 @@
 #include "arps/receiver.h"
 
-#include <arpa/inet.h>
-#include <errno.h>
-#include <fcntl.h>
+#include "socket_compat.h"
+
 #include <lz4.h>
-#include <math.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <poll.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/socket.h>
-#include <unistd.h>
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <cstdlib>
+#include <cstring>
 #include <limits>
 #include <sstream>
 #include <utility>
@@ -24,6 +18,7 @@ namespace arps {
 namespace {
 
 constexpr int kNoTimeout = -1;
+namespace sockets = socket_compat;
 
 struct RawPacket {
     std::uint16_t major = 0;
@@ -65,12 +60,6 @@ void WriteBe32(std::vector<std::uint8_t>& out, std::uint32_t value) {
     out.push_back(static_cast<std::uint8_t>(value & 0xff));
 }
 
-std::string ErrnoMessage(const char* prefix) {
-    std::ostringstream out;
-    out << prefix << ": " << strerror(errno);
-    return out.str();
-}
-
 double MsSince(std::chrono::steady_clock::time_point start) {
     using Duration = std::chrono::duration<double, std::milli>;
     return Duration(std::chrono::steady_clock::now() - start).count();
@@ -105,45 +94,24 @@ enum class IoStatus {
     Error,
 };
 
-IoStatus ReadExact(int fd, std::uint8_t* data, std::size_t len, int timeout_ms,
+IoStatus ReadExact(ArpsSocket socket, std::uint8_t* data, std::size_t len, int timeout_ms,
         std::string* error) {
     std::size_t offset = 0;
     auto deadline = DeadlineFromTimeout(timeout_ms);
     while (offset < len) {
-        pollfd pfd{};
-        pfd.fd = fd;
-        pfd.events = POLLIN;
         int timeout = offset == 0 ? RemainingTimeoutMs(deadline) : kNoTimeout;
-        int rc = poll(&pfd, 1, timeout);
-        if (rc == 0) {
+        sockets::WaitStatus wait = sockets::WaitReadable(socket, timeout, "wait(read)", error);
+        if (wait == sockets::WaitStatus::Timeout) {
             return IoStatus::Timeout;
         }
-        if (rc < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            if (error) {
-                *error = ErrnoMessage("poll(read)");
-            }
+        if (wait == sockets::WaitStatus::Error) {
             return IoStatus::Error;
         }
-        if (pfd.revents & (POLLERR | POLLNVAL)) {
-            if (error) {
-                *error = "socket read failed";
-            }
-            return IoStatus::Error;
-        }
-        ssize_t got = recv(fd, data + offset, len - offset, 0);
+        int got = sockets::Recv(socket, data + offset, len - offset, error);
         if (got == 0) {
             return IoStatus::Closed;
         }
         if (got < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            if (error) {
-                *error = ErrnoMessage("recv");
-            }
             return IoStatus::Error;
         }
         offset += static_cast<std::size_t>(got);
@@ -151,17 +119,12 @@ IoStatus ReadExact(int fd, std::uint8_t* data, std::size_t len, int timeout_ms,
     return IoStatus::Ok;
 }
 
-IoStatus WriteExact(int fd, const std::uint8_t* data, std::size_t len, std::string* error) {
+IoStatus WriteExact(ArpsSocket socket, const std::uint8_t* data, std::size_t len,
+        std::string* error) {
     std::size_t offset = 0;
     while (offset < len) {
-        ssize_t wrote = send(fd, data + offset, len - offset, 0);
+        int wrote = sockets::Send(socket, data + offset, len - offset, error);
         if (wrote < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            if (error) {
-                *error = ErrnoMessage("send");
-            }
             return IoStatus::Error;
         }
         if (wrote == 0) {
@@ -175,7 +138,8 @@ IoStatus WriteExact(int fd, const std::uint8_t* data, std::size_t len, std::stri
     return IoStatus::Ok;
 }
 
-bool ReadU32SectionLength(int fd, std::uint32_t packet_len, std::uint32_t consumed,
+bool ReadU32SectionLength(ArpsSocket socket, std::uint32_t packet_len,
+        std::uint32_t consumed,
         int timeout_ms, std::uint32_t* out, std::string* error, IoStatus* status) {
     if (packet_len - consumed < 4) {
         if (error) {
@@ -184,7 +148,7 @@ bool ReadU32SectionLength(int fd, std::uint32_t packet_len, std::uint32_t consum
         return false;
     }
     std::uint8_t buf[4];
-    *status = ReadExact(fd, buf, sizeof(buf), timeout_ms, error);
+    *status = ReadExact(socket, buf, sizeof(buf), timeout_ms, error);
     if (*status != IoStatus::Ok) {
         return false;
     }
@@ -199,24 +163,24 @@ bool ReadU32SectionLength(int fd, std::uint32_t packet_len, std::uint32_t consum
     return true;
 }
 
-bool ReadBytes(int fd, std::uint32_t len, int timeout_ms, std::vector<std::uint8_t>* out,
-        std::string* error, IoStatus* status) {
+bool ReadBytes(ArpsSocket socket, std::uint32_t len, int timeout_ms,
+        std::vector<std::uint8_t>* out, std::string* error, IoStatus* status) {
     out->assign(len, 0);
     if (len == 0) {
         *status = IoStatus::Ok;
         return true;
     }
-    *status = ReadExact(fd, out->data(), out->size(), timeout_ms, error);
+    *status = ReadExact(socket, out->data(), out->size(), timeout_ms, error);
     return *status == IoStatus::Ok;
 }
 
-bool SkipBytes(int fd, std::uint32_t len, int timeout_ms, std::string* error,
+bool SkipBytes(ArpsSocket socket, std::uint32_t len, int timeout_ms, std::string* error,
         IoStatus* status) {
     std::uint8_t buffer[16 * 1024];
     std::uint32_t remaining = len;
     while (remaining > 0) {
         std::size_t chunk = std::min<std::uint32_t>(remaining, sizeof(buffer));
-        *status = ReadExact(fd, buffer, chunk, timeout_ms, error);
+        *status = ReadExact(socket, buffer, chunk, timeout_ms, error);
         if (*status != IoStatus::Ok) {
             return false;
         }
@@ -252,8 +216,8 @@ double JsonNumber(const std::string& json, const char* key) {
         ++pos;
     }
     char* end = nullptr;
-    double value = strtod(json.c_str() + pos, &end);
-    if (end == json.c_str() + pos || !isfinite(value)) {
+    double value = std::strtod(json.c_str() + pos, &end);
+    if (end == json.c_str() + pos || !std::isfinite(value)) {
         return -1.0;
     }
     return value;
@@ -317,14 +281,15 @@ class ArpsReceiver::Impl {
 public:
     std::vector<std::uint8_t> frame_buffer;
 
-    ArpsReadResult ReadPacket(int fd, std::uint32_t max_packet_len, int timeout_ms) {
+    ArpsReadResult ReadPacket(ArpsSocket socket, std::uint32_t max_packet_len,
+            int timeout_ms) {
         RawPacket packet;
         std::string error;
         IoStatus status = IoStatus::Ok;
         auto start = std::chrono::steady_clock::now();
 
         std::uint8_t header[kHeaderLen];
-        status = ReadExact(fd, header, sizeof(header), timeout_ms, &error);
+        status = ReadExact(socket, header, sizeof(header), timeout_ms, &error);
         if (status == IoStatus::Timeout) {
             ArpsReadResult result;
             result.status = ArpsReadStatus::Timeout;
@@ -341,7 +306,7 @@ public:
             return ProtocolError(error.empty() ? "read header failed" : error);
         }
 
-        if (memcmp(header, kMagic, kMagicSize) != 0) {
+        if (std::memcmp(header, kMagic, kMagicSize) != 0) {
             return ProtocolError("bad ARPS magic");
         }
         packet.major = ReadBe16(header + 12);
@@ -365,35 +330,36 @@ public:
         std::uint32_t consumed = 0;
         std::uint32_t base_len = 0;
         int body_timeout_ms = kNoTimeout;
-        if (!ReadU32SectionLength(fd, packet.packet_len, consumed, body_timeout_ms, &base_len,
-                    &error, &status)) {
+        if (!ReadU32SectionLength(socket, packet.packet_len, consumed, body_timeout_ms,
+                    &base_len, &error, &status)) {
             return PacketReadFailure(status, error, &packet);
         }
         consumed += 4;
-        if (!ReadBytes(fd, base_len, body_timeout_ms, &packet.base, &error, &status)) {
+        if (!ReadBytes(socket, base_len, body_timeout_ms, &packet.base, &error, &status)) {
             return PacketReadFailure(status, error, &packet);
         }
         consumed += base_len;
 
         std::uint32_t bitmap_len = 0;
-        if (!ReadU32SectionLength(fd, packet.packet_len, consumed, body_timeout_ms, &bitmap_len,
-                    &error, &status)) {
+        if (!ReadU32SectionLength(socket, packet.packet_len, consumed, body_timeout_ms,
+                    &bitmap_len, &error, &status)) {
             return PacketReadFailure(status, error, &packet);
         }
         consumed += 4;
-        if (!ReadBytes(fd, bitmap_len, body_timeout_ms, &packet.bitmap, &error, &status)) {
+        if (!ReadBytes(socket, bitmap_len, body_timeout_ms, &packet.bitmap, &error,
+                    &status)) {
             return PacketReadFailure(status, error, &packet);
         }
         consumed += bitmap_len;
 
         std::uint32_t ext_len = 0;
-        if (!ReadU32SectionLength(fd, packet.packet_len, consumed, body_timeout_ms, &ext_len,
-                    &error, &status)) {
+        if (!ReadU32SectionLength(socket, packet.packet_len, consumed, body_timeout_ms,
+                    &ext_len, &error, &status)) {
             return PacketReadFailure(status, error, &packet);
         }
         consumed += 4;
         std::vector<std::uint8_t> ext_bytes;
-        if (!ReadBytes(fd, ext_len, body_timeout_ms, &ext_bytes, &error, &status)) {
+        if (!ReadBytes(socket, ext_len, body_timeout_ms, &ext_bytes, &error, &status)) {
             return PacketReadFailure(status, error, &packet);
         }
         packet.ext.assign(reinterpret_cast<const char*>(ext_bytes.data()), ext_bytes.size());
@@ -403,7 +369,7 @@ public:
             return ProtocolError("packet sections exceed packet_len", &packet);
         }
         std::uint32_t tail_len = packet.packet_len - consumed;
-        if (!SkipBytes(fd, tail_len, body_timeout_ms, &error, &status)) {
+        if (!SkipBytes(socket, tail_len, body_timeout_ms, &error, &status)) {
             return PacketReadFailure(status, error, &packet);
         }
         packet.packet_read_ms = MsSince(start);
@@ -524,102 +490,67 @@ ArpsReceiver::~ArpsReceiver() {
 
 bool ArpsReceiver::Listen(const std::string& host, std::uint16_t port, std::string* error) {
     Close();
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) {
-        if (error) {
-            *error = ErrnoMessage("socket");
-        }
+    ArpsSocket socket = sockets::OpenTcpSocket(error);
+    if (sockets::IsInvalid(socket)) {
         return false;
     }
 
-    int yes = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
-
-    sockaddr_in addr{};
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(port);
-    if (inet_pton(AF_INET, host.c_str(), &addr.sin_addr) != 1) {
-        if (error) {
-            *error = "invalid IPv4 listen host: " + host;
-        }
-        close(fd);
+    sockets::SetReuseAddr(socket);
+    if (!sockets::BindIpv4(socket, host, port, error)) {
+        sockets::Close(socket);
         return false;
     }
-    if (bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
-        if (error) {
-            *error = ErrnoMessage("bind");
-        }
-        close(fd);
+    if (!sockets::StartListening(socket, 1, error)) {
+        sockets::Close(socket);
         return false;
     }
-    if (listen(fd, 1) != 0) {
-        if (error) {
-            *error = ErrnoMessage("listen");
-        }
-        close(fd);
-        return false;
-    }
-    listen_fd_ = fd;
+    listen_socket_ = socket;
     return true;
 }
 
 bool ArpsReceiver::AcceptOnce(int timeout_ms, std::string* error) {
-    if (listen_fd_ < 0) {
+    if (sockets::IsInvalid(listen_socket_)) {
         if (error) {
             *error = "Listen() must be called before AcceptOnce()";
         }
         return false;
     }
-    pollfd pfd{};
-    pfd.fd = listen_fd_;
-    pfd.events = POLLIN;
-    int rc = poll(&pfd, 1, timeout_ms < 0 ? kNoTimeout : timeout_ms);
-    if (rc == 0) {
+    sockets::WaitStatus wait = sockets::WaitReadable(listen_socket_,
+            timeout_ms < 0 ? kNoTimeout : timeout_ms, "wait(accept)", error);
+    if (wait == sockets::WaitStatus::Timeout) {
         if (error) {
             *error = "accept timeout";
         }
         return false;
     }
-    if (rc < 0) {
-        if (errno == EINTR) {
-            return AcceptOnce(timeout_ms, error);
-        }
-        if (error) {
-            *error = ErrnoMessage("poll(accept)");
-        }
+    if (wait == sockets::WaitStatus::Error) {
         return false;
     }
-    int fd = accept(listen_fd_, nullptr, nullptr);
-    if (fd < 0) {
-        if (error) {
-            *error = ErrnoMessage("accept");
-        }
+    ArpsSocket socket = sockets::Accept(listen_socket_, error);
+    if (sockets::IsInvalid(socket)) {
         return false;
     }
-    return AdoptConnectedSocket(fd, error);
+    return AdoptConnectedSocket(socket, error);
 }
 
-bool ArpsReceiver::AdoptConnectedSocket(int fd, std::string* error) {
-    if (fd < 0) {
+bool ArpsReceiver::AdoptConnectedSocket(ArpsSocket socket, std::string* error) {
+    if (sockets::IsInvalid(socket)) {
         if (error) {
             *error = "invalid connected socket";
         }
         return false;
     }
-    if (client_fd_ >= 0) {
-        close(client_fd_);
+    if (!sockets::IsInvalid(client_socket_)) {
+        sockets::Close(client_socket_);
     }
-    client_fd_ = fd;
-    int yes = 1;
-    setsockopt(client_fd_, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes));
-#ifdef SO_NOSIGPIPE
-    setsockopt(client_fd_, SOL_SOCKET, SO_NOSIGPIPE, &yes, sizeof(yes));
-#endif
+    client_socket_ = socket;
+    sockets::SetTcpNoDelay(client_socket_);
+    sockets::SetNoSigpipe(client_socket_);
     return true;
 }
 
 bool ArpsReceiver::SendStart(const ArpsStartOptions& options, std::string* error) {
-    if (client_fd_ < 0) {
+    if (sockets::IsInvalid(client_socket_)) {
         if (error) {
             *error = "no connected client";
         }
@@ -641,27 +572,27 @@ bool ArpsReceiver::SendStart(const ArpsStartOptions& options, std::string* error
     WriteBe32(packet, 0);
     WriteBe32(packet, static_cast<std::uint32_t>(ext.size()));
     packet.insert(packet.end(), ext.begin(), ext.end());
-    return WriteExact(client_fd_, packet.data(), packet.size(), error) == IoStatus::Ok;
+    return WriteExact(client_socket_, packet.data(), packet.size(), error) == IoStatus::Ok;
 }
 
 ArpsReadResult ArpsReceiver::ReadNext(int timeout_ms) {
-    if (client_fd_ < 0) {
+    if (sockets::IsInvalid(client_socket_)) {
         ArpsReadResult result;
         result.status = ArpsReadStatus::Closed;
         result.message = "no connected client";
         return result;
     }
-    return impl_->ReadPacket(client_fd_, max_packet_len_, timeout_ms);
+    return impl_->ReadPacket(client_socket_, max_packet_len_, timeout_ms);
 }
 
 void ArpsReceiver::Close() {
-    if (client_fd_ >= 0) {
-        close(client_fd_);
-        client_fd_ = -1;
+    if (!sockets::IsInvalid(client_socket_)) {
+        sockets::Close(client_socket_);
+        client_socket_ = kInvalidArpsSocket;
     }
-    if (listen_fd_ >= 0) {
-        close(listen_fd_);
-        listen_fd_ = -1;
+    if (!sockets::IsInvalid(listen_socket_)) {
+        sockets::Close(listen_socket_);
+        listen_socket_ = kInvalidArpsSocket;
     }
 }
 

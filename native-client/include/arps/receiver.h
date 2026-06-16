@@ -5,6 +5,7 @@
 
 #include "arps/frame.h"
 #include "arps/protocol.h"
+#include "arps/socket.h"
 
 namespace arps {
 
@@ -52,16 +53,17 @@ public:
 
     bool Listen(const std::string& host, std::uint16_t port, std::string* error);
     bool AcceptOnce(int timeout_ms, std::string* error);
-    bool AdoptConnectedSocket(int fd, std::string* error);
+    bool AdoptConnectedSocket(ArpsSocket socket, std::string* error);
     bool SendStart(const ArpsStartOptions& options, std::string* error);
     ArpsReadResult ReadNext(int timeout_ms);
     void Close();
 
-    int client_fd() const { return client_fd_; }
+    ArpsSocket client_socket() const { return client_socket_; }
+    ArpsSocket client_fd() const { return client_socket_; }
 
 private:
-    int listen_fd_ = -1;
-    int client_fd_ = -1;
+    ArpsSocket listen_socket_ = kInvalidArpsSocket;
+    ArpsSocket client_socket_ = kInvalidArpsSocket;
     std::uint32_t max_packet_len_ = kDefaultMaxPacketLen;
     std::uint32_t next_sequence_ = 1;
 

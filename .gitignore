@@ -12,8 +12,12 @@ build/
 device/.cxx/
 device/.externalNativeBuild/
 
-# Local debug tools and captured fixtures are kept out of the project baseline.
-host-debug/
+# Host debug build outputs and captured fixtures
+host-debug/**/build/
+host-debug/build*/
+host-debug/minirecv/*.lz4
+host-debug/minirecv/*.rgba
+host-debug/minirecv/*.png
 
 # Draft planning docs are not part of the baseline yet.
 docs/project-foundation.md

@@ -1,17 +1,38 @@
 #include "arps/receiver.h"
 
-#include <assert.h>
+#include "../src/socket_compat.h"
+
 #include <lz4.h>
-#include <string.h>
-#include <sys/socket.h>
-#include <unistd.h>
 
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <vector>
 
 namespace {
+
+namespace compat = arps::socket_compat;
+
+[[noreturn]] void CheckFailed(const char* condition, const char* file, int line) {
+    std::cerr << "CHECK failed: " << condition << " at " << file << ":" << line << "\n";
+    std::abort();
+}
+
+#define CHECK(condition) \
+    ((condition) ? static_cast<void>(0) : CheckFailed(#condition, __FILE__, __LINE__))
+
+std::uint32_t U32Size(std::size_t size) {
+    CHECK(size <= std::numeric_limits<std::uint32_t>::max());
+    return static_cast<std::uint32_t>(size);
+}
+
+int IntSize(std::size_t size) {
+    CHECK(size <= static_cast<std::size_t>(std::numeric_limits<int>::max()));
+    return static_cast<int>(size);
+}
 
 void WriteBe16(std::vector<std::uint8_t>& out, std::uint16_t value) {
     out.push_back(static_cast<std::uint8_t>((value >> 8) & 0xff));
@@ -30,12 +51,24 @@ void WriteBe64(std::vector<std::uint8_t>& out, std::uint64_t value) {
     WriteBe32(out, static_cast<std::uint32_t>(value & 0xffffffffu));
 }
 
-void SendAll(int fd, const std::vector<std::uint8_t>& bytes) {
+void SendAll(arps::ArpsSocket socket, const std::vector<std::uint8_t>& bytes) {
     std::size_t offset = 0;
     while (offset < bytes.size()) {
-        ssize_t wrote = send(fd, bytes.data() + offset, bytes.size() - offset, 0);
-        assert(wrote > 0);
+        std::string error;
+        int wrote = compat::Send(socket, bytes.data() + offset, bytes.size() - offset,
+                &error);
+        CHECK(wrote > 0);
         offset += static_cast<std::size_t>(wrote);
+    }
+}
+
+void RecvAll(arps::ArpsSocket socket, std::uint8_t* data, std::size_t len) {
+    std::size_t offset = 0;
+    while (offset < len) {
+        std::string error;
+        int got = compat::Recv(socket, data + offset, len - offset, &error);
+        CHECK(got > 0);
+        offset += static_cast<std::size_t>(got);
     }
 }
 
@@ -57,7 +90,7 @@ std::vector<std::uint8_t> FrameBase(std::uint32_t width, std::uint32_t height,
     WriteBe32(base, 1);
     WriteBe32(base, 0);
     WriteBe32(base, 0);
-    assert(base.size() == arps::kFrameBaseLenV1);
+    CHECK(base.size() == arps::kFrameBaseLenV1);
     return base;
 }
 
@@ -72,14 +105,14 @@ std::vector<std::uint8_t> Packet(std::uint16_t type, const std::vector<std::uint
     WriteBe16(out, arps::kHeaderLen);
     WriteBe32(out, 0);
     WriteBe32(out, 1);
-    std::uint32_t packet_len = 4 + base.size() + 4 + bitmap.size() + 4 + ext.size()
-            + tail.size();
+    std::uint32_t packet_len = 4u + U32Size(base.size()) + 4u + U32Size(bitmap.size())
+            + 4u + U32Size(ext.size()) + U32Size(tail.size());
     WriteBe32(out, packet_len);
-    WriteBe32(out, static_cast<std::uint32_t>(base.size()));
+    WriteBe32(out, U32Size(base.size()));
     out.insert(out.end(), base.begin(), base.end());
-    WriteBe32(out, static_cast<std::uint32_t>(bitmap.size()));
+    WriteBe32(out, U32Size(bitmap.size()));
     out.insert(out.end(), bitmap.begin(), bitmap.end());
-    WriteBe32(out, static_cast<std::uint32_t>(ext.size()));
+    WriteBe32(out, U32Size(ext.size()));
     out.insert(out.end(), ext.begin(), ext.end());
     out.insert(out.end(), tail.begin(), tail.end());
     return out;
@@ -106,13 +139,13 @@ std::vector<std::uint8_t> PacketWithLargeLen() {
 
 template <typename Fn>
 void WithReadFromBytes(const std::vector<std::uint8_t>& bytes, Fn fn) {
-    int fds[2];
-    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
-    SendAll(fds[1], bytes);
-    close(fds[1]);
-    arps::ArpsReceiver receiver;
+    arps::ArpsSocket sockets[2];
     std::string error;
-    assert(receiver.AdoptConnectedSocket(fds[0], &error));
+    CHECK(compat::CreateConnectedSocketPair(sockets, &error));
+    SendAll(sockets[1], bytes);
+    compat::Close(sockets[1]);
+    arps::ArpsReceiver receiver;
+    CHECK(receiver.AdoptConnectedSocket(sockets[0], &error));
     arps::ArpsReadResult result = receiver.ReadNext(1000);
     fn(result);
 }
@@ -120,8 +153,8 @@ void WithReadFromBytes(const std::vector<std::uint8_t>& bytes, Fn fn) {
 void TestHello() {
     WithReadFromBytes(Packet(arps::kPacketHello, {}, {}, "{\"ok\":true}"),
             [](const arps::ArpsReadResult& result) {
-                assert(result.status == arps::ArpsReadStatus::Hello);
-                assert(result.json == "{\"ok\":true}");
+                CHECK(result.status == arps::ArpsReadStatus::Hello);
+                CHECK(result.json == "{\"ok\":true}");
             });
 }
 
@@ -130,17 +163,18 @@ void TestRawFrame() {
     for (std::size_t i = 0; i < raw.size(); ++i) {
         raw[i] = static_cast<std::uint8_t>(i);
     }
-    auto base = FrameBase(4, 3, 16, arps::kCompressionRaw, raw.size(), raw.size());
+    auto base = FrameBase(4, 3, 16, arps::kCompressionRaw, U32Size(raw.size()),
+            U32Size(raw.size()));
     WithReadFromBytes(Packet(arps::kPacketFrame, base, raw,
             "{\"capture_ms\":1.5,\"copy_ms\":0.5}", {1, 2, 3}),
             [&raw](const arps::ArpsReadResult& result) {
-                assert(result.status == arps::ArpsReadStatus::Frame);
-                assert(result.frame.meta.frame_no == 7);
-                assert(result.frame.meta.width == 4);
-                assert(result.frame.meta.height == 3);
-                assert(result.frame.argb8888_len == raw.size());
-                assert(memcmp(result.frame.argb8888, raw.data(), raw.size()) == 0);
-                assert(result.frame.device_timings.capture_ms == 1.5);
+                CHECK(result.status == arps::ArpsReadStatus::Frame);
+                CHECK(result.frame.meta.frame_no == 7);
+                CHECK(result.frame.meta.width == 4);
+                CHECK(result.frame.meta.height == 3);
+                CHECK(result.frame.argb8888_len == raw.size());
+                CHECK(std::memcmp(result.frame.argb8888, raw.data(), raw.size()) == 0);
+                CHECK(result.frame.device_timings.capture_ms == 1.5);
             });
 }
 
@@ -149,71 +183,74 @@ void TestLz4Frame() {
     for (std::size_t i = 0; i < raw.size(); ++i) {
         raw[i] = static_cast<std::uint8_t>((i * 17) & 0xff);
     }
-    std::vector<std::uint8_t> compressed(LZ4_compressBound(static_cast<int>(raw.size())));
+    std::vector<std::uint8_t> compressed(
+            static_cast<std::size_t>(LZ4_compressBound(IntSize(raw.size()))));
     int written = LZ4_compress_default(reinterpret_cast<const char*>(raw.data()),
-            reinterpret_cast<char*>(compressed.data()), static_cast<int>(raw.size()),
-            static_cast<int>(compressed.size()));
-    assert(written > 0);
+            reinterpret_cast<char*>(compressed.data()), IntSize(raw.size()),
+            IntSize(compressed.size()));
+    CHECK(written > 0);
     compressed.resize(static_cast<std::size_t>(written));
-    auto base = FrameBase(8, 4, 32, arps::kCompressionLz4Block, raw.size(),
-            compressed.size());
+    auto base = FrameBase(8, 4, 32, arps::kCompressionLz4Block, U32Size(raw.size()),
+            U32Size(compressed.size()));
     WithReadFromBytes(Packet(arps::kPacketFrame, base, compressed,
             "{\"compress_ms\":2.25}"), [&raw, &compressed](
             const arps::ArpsReadResult& result) {
-                assert(result.status == arps::ArpsReadStatus::Frame);
-                assert(result.frame.argb8888_len == raw.size());
-                assert(memcmp(result.frame.argb8888, raw.data(), raw.size()) == 0);
-                assert(result.frame.bitmap_payload_len == compressed.size());
-                assert(result.frame.device_timings.compress_ms == 2.25);
+                CHECK(result.status == arps::ArpsReadStatus::Frame);
+                CHECK(result.frame.argb8888_len == raw.size());
+                CHECK(std::memcmp(result.frame.argb8888, raw.data(), raw.size()) == 0);
+                CHECK(result.frame.bitmap_payload_len == compressed.size());
+                CHECK(result.frame.device_timings.compress_ms == 2.25);
             });
 }
 
 void TestProtocolErrors() {
     WithReadFromBytes(PacketWithBadMagic(), [](const arps::ArpsReadResult& result) {
-        assert(result.status == arps::ArpsReadStatus::ProtocolError);
+        CHECK(result.status == arps::ArpsReadStatus::ProtocolError);
     });
     WithReadFromBytes(PacketWithLargeLen(), [](const arps::ArpsReadResult& result) {
-        assert(result.status == arps::ArpsReadStatus::ProtocolError);
+        CHECK(result.status == arps::ArpsReadStatus::ProtocolError);
     });
 
-    std::vector<std::uint8_t> raw(16, 0xaa);
-    auto short_base = FrameBase(2, 2, 8, arps::kCompressionRaw, raw.size(), raw.size());
+    std::vector<std::uint8_t> raw(16, static_cast<std::uint8_t>(0xaa));
+    auto short_base = FrameBase(2, 2, 8, arps::kCompressionRaw, U32Size(raw.size()),
+            U32Size(raw.size()));
     short_base.resize(12);
     WithReadFromBytes(Packet(arps::kPacketFrame, short_base, raw, ""),
             [](const arps::ArpsReadResult& result) {
-                assert(result.status == arps::ArpsReadStatus::ProtocolError);
+                CHECK(result.status == arps::ArpsReadStatus::ProtocolError);
             });
 
-    auto mismatch_base = FrameBase(2, 2, 8, arps::kCompressionRaw, raw.size(), raw.size() + 1);
+    auto mismatch_base = FrameBase(2, 2, 8, arps::kCompressionRaw, U32Size(raw.size()),
+            U32Size(raw.size() + 1));
     WithReadFromBytes(Packet(arps::kPacketFrame, mismatch_base, raw, ""),
             [](const arps::ArpsReadResult& result) {
-                assert(result.status == arps::ArpsReadStatus::ProtocolError);
+                CHECK(result.status == arps::ArpsReadStatus::ProtocolError);
             });
 
     std::vector<std::uint8_t> bad_lz4 = {0, 1, 2, 3, 4};
-    auto bad_lz4_base = FrameBase(2, 2, 8, arps::kCompressionLz4Block, raw.size(),
-            bad_lz4.size());
+    auto bad_lz4_base = FrameBase(2, 2, 8, arps::kCompressionLz4Block,
+            U32Size(raw.size()), U32Size(bad_lz4.size()));
     WithReadFromBytes(Packet(arps::kPacketFrame, bad_lz4_base, bad_lz4, ""),
             [](const arps::ArpsReadResult& result) {
-                assert(result.status == arps::ArpsReadStatus::ProtocolError);
+                CHECK(result.status == arps::ArpsReadStatus::ProtocolError);
             });
 }
 
 void TestSendStart() {
-    int fds[2];
-    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
-    arps::ArpsReceiver receiver;
+    arps::ArpsSocket sockets[2];
     std::string error;
-    assert(receiver.AdoptConnectedSocket(fds[0], &error));
+    CHECK(compat::CreateConnectedSocketPair(sockets, &error));
+    arps::ArpsReceiver receiver;
+    CHECK(receiver.AdoptConnectedSocket(sockets[0], &error));
     arps::ArpsStartOptions options;
     options.compression = "raw";
-    assert(receiver.SendStart(options, &error));
+    CHECK(receiver.SendStart(options, &error));
     std::uint8_t header[arps::kHeaderLen];
-    assert(recv(fds[1], header, sizeof(header), MSG_WAITALL) == sizeof(header));
-    assert(memcmp(header, arps::kMagic, arps::kMagicSize) == 0);
-    assert(header[16] == 0);
-    assert(header[17] == arps::kPacketStart);
-    close(fds[1]);
+    RecvAll(sockets[1], header, sizeof(header));
+    CHECK(std::memcmp(header, arps::kMagic, arps::kMagicSize) == 0);
+    CHECK(header[16] == 0);
+    CHECK(header[17] == arps::kPacketStart);
+    compat::Close(sockets[1]);
 }
 
 }  // namespace

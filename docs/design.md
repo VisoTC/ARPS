@@ -28,7 +28,7 @@ shell 环境运行，不安装为普通应用；它采集主显示屏的 `ARGB_8
 - 不做音频、触控、剪贴板或完整投屏 UI。
 - 不在设备端实现业务识图或自动化框架逻辑。
 - 不依赖安装后的 Android package 路径。
-- 不把调试工具、mock 工具或采集样例作为项目基线的一部分。
+- 不把调试构建产物、临时截图或采集样例作为项目基线的一部分。
 - 不实现纯 Java LZ4 回退；native 加载失败时应暴露真实失败并修复 native 链路。
 
 ## 目录边界
@@ -36,13 +36,15 @@ shell 环境运行，不安装为普通应用；它采集主显示屏的 `ARGB_8
 ```text
 device/                 Android 设备端 app_process 客户端
 native-client/          C++ 协议接收、校验和解压库
+host-debug/             开发期调试工具，复用 native-client 验证主机链路
 third_party/lz4/         vendored LZ4 C 源码
 docs/design.md          本统一设计文档
 gradle/wrapper/          Gradle Wrapper，随源码提交
 ```
 
-本地调试工具、mock 程序、参考仓库和构建产物不属于提交基线。它们可以保留在工作区，
-但应通过 `.gitignore` 排除。`host-debug/` 的开发期用途和使用方式见
+`host-debug/` 的源码属于项目基线，因为它是当前验证 `native-client` 和设备端链路的
+主要入口。它的构建产物、临时截图、抓帧 payload、参考仓库和其他本地状态不提交，
+应通过 `.gitignore` 排除。`host-debug/` 的开发期用途和使用方式见
 `docs/host-debug.md`。
 
 ## 构建形态

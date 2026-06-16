@@ -2,7 +2,7 @@
 
 本文档说明 `host-debug/` 的设计定位和使用边界。`host-debug/` 是开发期调试工具集，
 用于验证设备端、协议接收层和帧显示链路；它不是最终 C++ 自动化框架的集成边界，也
-不属于当前源码提交基线。
+不是正式交付 API。
 
 ## 定位
 
@@ -14,8 +14,8 @@ ARPS 的正式集成边界是 `native-client/`。`host-debug/` 只服务于开�
 - 在没有 Android 设备时用 mock source 验证主机接收和显示链路。
 - 用最小 Python receiver 复核协议包结构和原始 payload。
 
-这些工具允许依赖本机状态、临时样例和手工命令；因此默认通过 `.gitignore` 排除
-`host-debug/`，避免把本地调试产物混入项目初始基线。
+`host-debug/` 的源码应随项目提交，因为它是当前验证 `native-client` 和设备端链路的
+主要入口。构建输出、临时样例、截图和抓帧 payload 继续通过 `.gitignore` 排除。
 
 ## 目录结构
 
@@ -23,7 +23,7 @@ ARPS 的正式集成边界是 `native-client/`。`host-debug/` 只服务于开�
 host-debug/
   cli/                 SDL 可视化调试主机
   mock-source/         合成帧源，模拟设备端连接主机
-  minirecv/            Python 最小协议接收器和本地样例 payload
+  minirecv/            Python 最小协议接收器
 ```
 
 ## `host-debug/cli`
@@ -50,6 +50,16 @@ make -C host-debug/cli
 该工具依赖 `clang++`、vendored `third_party/lz4`、`native-client` 和本机 SDL2
 开发库。构建输出位于 `host-debug/cli/build/`，不应提交。
 
+Windows 构建使用顶层 CMake 入口，首次配置会通过 `FetchContent` 下载 SDL2
+`release-2.32.0` 源码，并在本地构建出 `SDL2.dll`：
+
+```powershell
+cmake -S host-debug -B host-debug/build-win
+cmake --build host-debug/build-win --config Release
+```
+
+Release 输出目录会包含 `arps-host-debug.exe`、`arps-mock-source.exe` 和 `SDL2.dll`。
+
 只监听连接：
 
 ```bash
@@ -63,6 +73,17 @@ host-debug/cli/build/arps-host-debug \
   --serial=<adb-serial> \
   --apk=device/build/outputs/apk/debug/arps-device.apk \
   --port=27183 \
+  --compression=lz4_block
+```
+
+Windows 上也可以使用 TCP adb serial，例如：
+
+```powershell
+host-debug\build-win\Release\arps-host-debug.exe `
+  --serial=192.168.65.31:5555 `
+  --adb=C:\tools\scrcpy-win64-v3.3.4\adb.exe `
+  --apk=device\build\outputs\apk\debug\arps-device.apk `
+  --port=27183 `
   --compression=lz4_block
 ```
 
@@ -107,6 +128,8 @@ frames。
 ```bash
 make -C host-debug/mock-source
 ```
+
+Windows 下 `mock-source` 由 `host-debug` 顶层 CMake 与 `arps-host-debug` 一起构建。
 
 运行示例：
 
@@ -171,11 +194,22 @@ python3 host-debug/minirecv/arps_minirecv.py \
 
 ## 提交策略
 
-`host-debug/` 当前保持本地 ignored 状态。原因：
+`host-debug/` 的源码、Makefile 和轻量说明文档应进入仓库。以下内容不提交：
 
-- 其中包含构建输出、样例 payload、截图和调试过程文件。
-- CLI 和 mock 工具仍然是开发辅助，不是正式交付 API。
-- 正式主机集成应依赖 `native-client/`，而不是依赖调试 CLI。
+- `host-debug/**/build/`
+- `host-debug/minirecv/*.lz4`
+- `host-debug/minirecv/*.rgba`
+- `host-debug/minirecv/*.png`
+- `.DS_Store` 和其他本机状态文件
+
+提交源码的原因：
+
+- `arps-host-debug` 是当前最直接的端到端验证入口。
+- 它链接并复用 `native-client`，能及时暴露协议接收、校验和解压问题。
+- `mock-source` 能在没有 Android 设备时验证主机链路。
+- `minirecv` 能用最小依赖排查协议包结构。
+
+边界仍然不变：正式主机集成应依赖 `native-client/`，而不是依赖调试 CLI。
 
 如果未来要把某个调试工具提升为正式项目产物，应先做一次边界收敛：
 
