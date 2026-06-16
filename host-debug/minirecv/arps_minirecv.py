@@ -36,6 +36,15 @@ def read_u32(sock):
     return U32.unpack(read_exact(sock, 4))[0]
 
 
+def read_section_length(sock, packet_len, consumed):
+    if packet_len - consumed < 4:
+        raise ValueError("packet section length missing")
+    length = read_u32(sock)
+    if length > packet_len - consumed - 4:
+        raise ValueError(f"section length exceeds packet body: {length}")
+    return length
+
+
 def read_packet(sock, max_packet_len):
     header = read_exact(sock, HEADER.size)
     magic, major, minor, packet_type, header_len, flags, sequence, packet_len = HEADER.unpack(header)
@@ -43,28 +52,26 @@ def read_packet(sock, max_packet_len):
         raise ValueError(f"bad magic: {magic!r}")
     if header_len != HEADER.size:
         raise ValueError(f"bad header_len: {header_len}")
-    if packet_len > max_packet_len:
-        raise ValueError(f"packet too large: {packet_len}")
+    if packet_len < 12 or packet_len > max_packet_len:
+        raise ValueError(f"invalid packet_len: {packet_len}")
 
     consumed = 0
-    base_len = read_u32(sock)
+    base_len = read_section_length(sock, packet_len, consumed)
     consumed += 4
     base = read_exact(sock, base_len)
     consumed += base_len
 
-    bitmap_len = read_u32(sock)
+    bitmap_len = read_section_length(sock, packet_len, consumed)
     consumed += 4
     bitmap = read_exact(sock, bitmap_len)
     consumed += bitmap_len
 
-    ext_len = read_u32(sock)
+    ext_len = read_section_length(sock, packet_len, consumed)
     consumed += 4
     ext = read_exact(sock, ext_len)
     consumed += ext_len
 
     tail_len = packet_len - consumed
-    if tail_len < 0:
-        raise ValueError("packet sections exceed packet_len")
     if tail_len:
         read_exact(sock, tail_len)
 

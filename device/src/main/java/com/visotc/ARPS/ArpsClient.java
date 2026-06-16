@@ -24,6 +24,7 @@ final class ArpsClient {
     private PowerController powerController;
     private boolean cleanupDone;
     private boolean previousScreenOn;
+    private boolean powerStateKnown;
 
     ArpsClient(Options options) {
         this.options = options;
@@ -46,6 +47,7 @@ final class ArpsClient {
         try {
             powerController = new PowerController();
             previousScreenOn = powerController.isScreenOn(options.displayId);
+            powerStateKnown = true;
 
             connect();
             writer = new ProtocolWriter(socket.getOutputStream());
@@ -92,6 +94,11 @@ final class ArpsClient {
     void requestStop() {
         stopRequested = true;
         closeSocketQuietly();
+    }
+
+    void shutdown() {
+        requestStop();
+        cleanupPowerQuietly();
     }
 
     private void connect() throws IOException {
@@ -236,7 +243,7 @@ final class ArpsClient {
     }
 
     private synchronized void cleanupPowerQuietly() {
-        if (cleanupDone || powerController == null) {
+        if (cleanupDone || powerController == null || !powerStateKnown) {
             return;
         }
         cleanupDone = true;

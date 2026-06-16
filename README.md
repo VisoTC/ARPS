@@ -70,7 +70,7 @@ host closes socket or device sends STOP/ERROR
 ```
 
 设备端启动时通过 `CLASSPATH` 定位自身 apk，从 zip 中解出当前 ABI 的 native 库到
-`/data/local/tmp` 后 `System.load`。
+`/data/local/tmp` 下的唯一临时文件，`System.load` 后尽量删除临时文件。
 
 ### 主机调试工具（host-debug）
 
@@ -100,6 +100,9 @@ adb push device/build/outputs/apk/debug/arps-device.apk /data/local/tmp/arps-dev
 adb shell CLASSPATH=/data/local/tmp/arps-device.apk \
   app_process / com.visotc.ARPS.Main --connect-port=27183
 ```
+
+设备端的最终流模式由主机在 `START.stream_mode` 中下发；命令行 `--stream-mode`
+只是在收到 `START` 前的默认值。
 
 ### 用调试 CLI 接收并显示
 
@@ -144,6 +147,9 @@ python3 host-debug/minirecv/arps_minirecv.py \
   --port 27183 --frames 1 --compression lz4_block --stream-mode pull
 ```
 
+`minirecv --stream-mode pull` 会在 `START.stream_mode` 中要求设备进入 pull 模式，
+因此配套设备命令无需重复传 `--stream-mode=pull`。
+
 ## 协议 v1（概要）
 
 ARPS v1 运行在单条有序 TCP 连接上，多字节整数一律 big-endian，包边界由长度字段划分
@@ -165,7 +171,8 @@ default_max_len  = 64 MiB
 定长 `BaseData` 中携带帧元数据，`BitmapPayload` 为 `raw` 或 `lz4_block` 压缩像素。
 
 像素约定：每像素 4 字节，内存顺序按 `R, G, B, A` 解释；行寻址必须使用 `row_bytes`，
-不得假设等于 `width * 4`。协议层不做通道转换。
+不得假设等于 `width * 4`，但接收端必须拒绝小于 `width * 4` 的 `row_bytes`。
+协议层不做通道转换。
 
 完整规范见 [docs/design.md](docs/design.md)，调试工具说明见 [docs/host-debug.md](docs/host-debug.md)。
 

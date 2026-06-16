@@ -369,7 +369,7 @@ offset  size  field
 - `monotonic_time_ns`：设备端采集时间，使用设备本地 monotonic clock。该值不能和
   主机时钟直接相减，只适合做设备侧阶段耗时或帧间隔分析。
 - `width` / `height`：当前帧像素宽高。
-- `row_bytes`：解压后每行字节数。
+- `row_bytes`：解压后每行字节数，必须至少能容纳一行像素（`width * 4`）。
 - `rotation`：Android display rotation，`0/1/2/3` 对应 `0/90/180/270` 度。
 - `pixel_format`：当前只支持 `1 = ANDROID_ARGB_8888_RAW`。
 - `compression_type`：`0 = raw`，`1 = lz4_block`，`2 = delta_lz4`，`3 = extended`。
@@ -407,7 +407,9 @@ offset  size  field
 - `FRAME base_len >= 64`。
 - `pixel_format == 1`。
 - `compressed_len == bitmap_len`。
+- `width > 0`、`height > 0`，且 `row_bytes >= width * 4`。
 - `uncompressed_len == row_bytes * height`。
+- `uncompressed_len` 不超过接收端配置的解压输出预算；默认可使用 `max_packet_len`。
 - `payload_checksum != 0` 时，CRC32 匹配 BitmapPayload。
 - `raw` payload 长度等于 `uncompressed_len`。
 - `lz4_block` 解压成功，且输出长度等于 `uncompressed_len`。

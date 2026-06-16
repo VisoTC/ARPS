@@ -12,6 +12,9 @@ adb push device/build/outputs/apk/debug/arps-device.apk /data/local/tmp/arps-dev
 adb shell CLASSPATH=/data/local/tmp/arps-device.apk app_process / com.visotc.ARPS.Main --connect-port=27183
 ```
 
+`--stream-mode pull` is sent to the device in `START.stream_mode`; the device
+command does not need its own `--stream-mode=pull` argument for this test.
+
 For raw payload inspection:
 
 ```bash

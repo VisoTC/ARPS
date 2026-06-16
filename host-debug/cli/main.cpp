@@ -737,8 +737,6 @@ int RunGui(arps::ArpsReceiver* receiver, bool pull_mode) {
                     running = false;
                 }
             }
-        } else if (result.status == arps::ArpsReadStatus::Ready) {
-            stats.state = pull_mode ? "PULL" : "STREAMING";
         } else if (result.status == arps::ArpsReadStatus::Timeout) {
             // Keep rendering the latest complete frame.
         } else if (result.status == arps::ArpsReadStatus::Error) {

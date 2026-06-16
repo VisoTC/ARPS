@@ -12,6 +12,7 @@ import java.util.zip.ZipFile;
 
 final class Lz4 {
     private static final String LIB_NAME = "liblz4arps.so";
+    private static final File TEMP_DIR = new File("/data/local/tmp");
     private static boolean loaded;
 
     private Lz4() {
@@ -74,7 +75,9 @@ final class Lz4 {
             }
 
             ZipEntry entry = zip.getEntry("lib/" + abi + "/" + LIB_NAME);
-            File output = new File("/data/local/tmp/arps-" + abi + "-" + LIB_NAME);
+            File output = File.createTempFile("arps-" + abi + "-", "-" + LIB_NAME, TEMP_DIR);
+            output.deleteOnExit();
+            restrictOwnerAccess(output);
             try (InputStream in = zip.getInputStream(entry);
                     FileOutputStream out = new FileOutputStream(output, false)) {
                 byte[] buffer = new byte[64 * 1024];
@@ -84,8 +87,24 @@ final class Lz4 {
                 }
                 out.getFD().sync();
             }
-            System.load(output.getAbsolutePath());
+            output.setWritable(false, true);
+            try {
+                System.load(output.getAbsolutePath());
+            } finally {
+                if (output.exists() && !output.delete()) {
+                    Log.i("Temporary native library remains until process exit: "
+                            + output.getAbsolutePath());
+                }
+            }
         }
+    }
+
+    private static void restrictOwnerAccess(File file) {
+        file.setReadable(false, false);
+        file.setWritable(false, false);
+        file.setExecutable(false, false);
+        file.setReadable(true, true);
+        file.setWritable(true, true);
     }
 
     private static String findSupportedAbi(ZipFile zip) {

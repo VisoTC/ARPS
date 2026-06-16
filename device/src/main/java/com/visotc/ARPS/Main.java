@@ -11,14 +11,14 @@ public final class Main {
             Options options = Options.parse(args);
             client = new ArpsClient(options);
             ArpsClient shutdownClient = client;
-            Runtime.getRuntime().addShutdownHook(new Thread(shutdownClient::requestStop,
+            Runtime.getRuntime().addShutdownHook(new Thread(shutdownClient::shutdown,
                     "arps-shutdown"));
             exitCode = client.run();
         } catch (Throwable e) {
             Log.e("Fatal startup error", e);
             exitCode = 1;
             if (client != null) {
-                client.requestStop();
+                client.shutdown();
             }
         }
         System.exit(exitCode);

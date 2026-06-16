@@ -186,6 +186,9 @@ adb push device/build/outputs/apk/debug/arps-device.apk /data/local/tmp/arps-dev
 adb shell CLASSPATH=/data/local/tmp/arps-device.apk app_process / com.visotc.ARPS.Main --connect-port=27183
 ```
 
+`minirecv --stream-mode pull` 会把 `stream_mode=pull` 写入 `START`，设备端收到
+`START` 后切换到 pull 模式；设备启动命令不需要重复传 `--stream-mode=pull`。
+
 保存 raw payload：
 
 ```bash

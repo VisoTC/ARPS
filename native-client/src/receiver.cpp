@@ -384,7 +384,7 @@ public:
             case kPacketStop:
                 return StatusResult(ArpsReadStatus::Stop, packet);
             case kPacketFrame:
-                return DecodeFrame(packet);
+                return DecodeFrame(packet, max_packet_len);
             default:
                 return ProtocolError("unknown packet_type", &packet);
         }
@@ -408,7 +408,7 @@ private:
         return ProtocolError(error.empty() ? "packet read failed" : error, packet);
     }
 
-    ArpsReadResult DecodeFrame(const RawPacket& packet) {
+    ArpsReadResult DecodeFrame(const RawPacket& packet, std::uint32_t max_packet_len) {
         if (packet.base.size() < kFrameBaseLenV1) {
             return ProtocolError("FRAME base_len is smaller than BaseData v1", &packet);
         }
@@ -419,10 +419,20 @@ private:
         if (meta.compressed_len != packet.bitmap.size()) {
             return ProtocolError("compressed_len does not match bitmap_len", &packet);
         }
+        if (meta.width == 0 || meta.height == 0) {
+            return ProtocolError("invalid frame dimensions", &packet);
+        }
+        std::uint64_t min_row_bytes = static_cast<std::uint64_t>(meta.width) * 4u;
+        if (meta.row_bytes < min_row_bytes) {
+            return ProtocolError("row_bytes is smaller than width * 4", &packet);
+        }
         std::uint64_t expected_len = static_cast<std::uint64_t>(meta.row_bytes) * meta.height;
         if (expected_len > std::numeric_limits<std::uint32_t>::max()
                 || meta.uncompressed_len != expected_len) {
             return ProtocolError("uncompressed_len does not equal row_bytes * height", &packet);
+        }
+        if (meta.uncompressed_len > max_packet_len) {
+            return ProtocolError("uncompressed_len exceeds max_packet_len", &packet);
         }
         if (meta.payload_checksum != 0
                 && Crc32(packet.bitmap.data(), packet.bitmap.size()) != meta.payload_checksum) {
@@ -436,6 +446,11 @@ private:
             }
             frame_buffer = packet.bitmap;
         } else if (meta.compression_type == kCompressionLz4Block) {
+            if (packet.bitmap.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())
+                    || meta.uncompressed_len > static_cast<std::uint32_t>(
+                            std::numeric_limits<int>::max())) {
+                return ProtocolError("LZ4 input or output exceeds decoder limits", &packet);
+            }
             frame_buffer.assign(meta.uncompressed_len, 0);
             int decoded = LZ4_decompress_safe(
                     reinterpret_cast<const char*>(packet.bitmap.data()),

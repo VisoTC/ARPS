@@ -255,6 +255,23 @@ void TestProtocolErrors() {
                 CHECK(result.status == arps::ArpsReadStatus::ProtocolError);
             });
 
+    auto narrow_stride_base = FrameBase(1000, 2, 8, arps::kCompressionRaw, U32Size(raw.size()),
+            U32Size(raw.size()));
+    WithReadFromBytes(Packet(arps::kPacketFrame, narrow_stride_base, raw, ""),
+            [](const arps::ArpsReadResult& result) {
+                CHECK(result.status == arps::ArpsReadStatus::ProtocolError);
+            });
+
+    std::uint32_t huge_height = arps::kDefaultMaxPacketLen / 4u + 1u;
+    std::uint32_t huge_uncompressed_len = huge_height * 4u;
+    std::vector<std::uint8_t> tiny_lz4 = {0};
+    auto huge_lz4_base = FrameBase(1, huge_height, 4, arps::kCompressionLz4Block,
+            huge_uncompressed_len, U32Size(tiny_lz4.size()));
+    WithReadFromBytes(Packet(arps::kPacketFrame, huge_lz4_base, tiny_lz4, ""),
+            [](const arps::ArpsReadResult& result) {
+                CHECK(result.status == arps::ArpsReadStatus::ProtocolError);
+            });
+
     std::vector<std::uint8_t> bad_lz4 = {0, 1, 2, 3, 4};
     auto bad_lz4_base = FrameBase(2, 2, 8, arps::kCompressionLz4Block,
             U32Size(raw.size()), U32Size(bad_lz4.size()));
