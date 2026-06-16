@@ -3,15 +3,10 @@ package com.visotc.ARPS;
 import android.annotation.SuppressLint;
 import android.graphics.Bitmap;
 import android.graphics.ColorSpace;
-import android.graphics.PixelFormat;
-import android.graphics.Rect;
 import android.hardware.HardwareBuffer;
-import android.media.Image;
-import android.media.ImageReader;
 import android.os.Build;
 import android.os.IBinder;
 import android.os.SystemClock;
-import android.view.Surface;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
@@ -23,53 +18,43 @@ final class ScreenCapturer implements AutoCloseable {
     private final DisplayReader displayReader = new DisplayReader();
     private final CaptureMode mode;
     private final BitmapCaptureBackend bitmapBackend = new BitmapCaptureBackend();
-    private SurfaceCaptureBackend surfaceBackend;
-    private boolean surfaceDisabled;
+    private boolean hardwareLz4Disabled;
 
     ScreenCapturer(CaptureMode mode) {
         this.mode = mode;
     }
 
     CapturedFrame capture(int displayId) throws Exception {
+        return bitmapBackend.capture(readValidDisplay(displayId));
+    }
+
+    CapturedFrame captureHardwareLz4(int displayId) throws Exception {
+        if (mode == CaptureMode.BITMAP || hardwareLz4Disabled) {
+            return null;
+        }
+        try {
+            return bitmapBackend.captureHardwareLz4(readValidDisplay(displayId));
+        } catch (Exception e) {
+            if (mode == CaptureMode.HARDWARE) {
+                throw e;
+            }
+            hardwareLz4Disabled = true;
+            Log.e("HardwareBuffer direct LZ4 failed; falling back to bitmap capture", e);
+            return null;
+        }
+    }
+
+    @Override
+    public void close() {
+    }
+
+    private DisplayInfoSnapshot readValidDisplay(int displayId) throws Exception {
         DisplayInfoSnapshot display = displayReader.read(displayId);
         if (display.width <= 0 || display.height <= 0) {
             throw new IllegalStateException("Invalid display size "
                     + display.width + "x" + display.height);
         }
-
-        if (mode != CaptureMode.BITMAP && !surfaceDisabled) {
-            try {
-                if (surfaceBackend == null || !surfaceBackend.matches(display)) {
-                    closeSurfaceBackend();
-                    surfaceBackend = new SurfaceCaptureBackend(display);
-                    Log.i("Capture backend: ImageReader surface "
-                            + display.width + "x" + display.height
-                            + " layerStack=" + display.layerStack);
-                }
-                return surfaceBackend.capture(display);
-            } catch (Throwable e) {
-                closeSurfaceBackend();
-                surfaceDisabled = true;
-                Log.e("ImageReader surface capture failed; falling back to bitmap capture", e);
-                if (mode == CaptureMode.SURFACE) {
-                    throw e;
-                }
-            }
-        }
-
-        return bitmapBackend.capture(display);
-    }
-
-    @Override
-    public void close() {
-        closeSurfaceBackend();
-    }
-
-    private void closeSurfaceBackend() {
-        if (surfaceBackend != null) {
-            surfaceBackend.close();
-            surfaceBackend = null;
-        }
+        return display;
     }
 
     private static final class BitmapCaptureBackend {
@@ -125,7 +110,50 @@ final class ScreenCapturer implements AutoCloseable {
             }
         }
 
+        CapturedFrame captureHardwareLz4(DisplayInfoSnapshot display) throws Exception {
+            long captureStartNs = SystemClock.elapsedRealtimeNanos();
+            HardwareCaptureResult captureResult = captureHardwareBuffer(display.width,
+                    display.height);
+            long captureEndNs = SystemClock.elapsedRealtimeNanos();
+            try {
+                Lz4.HardwareBufferCompression compressed =
+                        Lz4.compressHardwareBuffer(captureResult.hardwareBuffer);
+                return new CapturedFrame(compressed.payload, compressed.compressMs,
+                        compressed.width, compressed.height, compressed.rowBytes,
+                        compressed.uncompressedLen, display.rotation, captureResult.colorSpace,
+                        captureStartNs, nanosToMillis(captureEndNs - captureStartNs),
+                        compressed.lockMs, compressed.format, compressed.usage,
+                        "android.window.ScreenCapture.captureDisplay+AHardwareBuffer");
+            } finally {
+                captureResult.hardwareBuffer.close();
+            }
+        }
+
         private CaptureResult captureBitmap(int width, int height) throws Exception {
+            HardwareCaptureResult captureResult = captureHardwareBuffer(width, height);
+            HardwareBuffer hardwareBuffer = captureResult.hardwareBuffer;
+            try {
+                Bitmap hardwareBitmap = Bitmap.wrapHardwareBuffer(hardwareBuffer,
+                        captureResult.colorSpaceObject);
+                if (hardwareBitmap == null) {
+                    throw new IllegalStateException("Bitmap.wrapHardwareBuffer returned null");
+                }
+                try {
+                    Bitmap cpuBitmap = hardwareBitmap.copy(Bitmap.Config.ARGB_8888, false);
+                    if (cpuBitmap == null) {
+                        throw new IllegalStateException("copy from hardware bitmap returned null");
+                    }
+                    return new CaptureResult(cpuBitmap, captureResult.colorSpace);
+                } finally {
+                    hardwareBitmap.recycle();
+                }
+            } finally {
+                hardwareBuffer.close();
+            }
+        }
+
+        private HardwareCaptureResult captureHardwareBuffer(int width, int height)
+                throws Exception {
             if (displayToken == null) {
                 displayToken = SurfaceControlBridge.getCaptureDisplayToken();
             }
@@ -150,132 +178,8 @@ final class ScreenCapturer implements AutoCloseable {
             if (hardwareBuffer == null) {
                 throw new IllegalStateException("Screenshot hardware buffer is null");
             }
-
-            try {
-                Bitmap hardwareBitmap = Bitmap.wrapHardwareBuffer(hardwareBuffer, colorSpace);
-                if (hardwareBitmap == null) {
-                    throw new IllegalStateException("Bitmap.wrapHardwareBuffer returned null");
-                }
-                try {
-                    Bitmap cpuBitmap = hardwareBitmap.copy(Bitmap.Config.ARGB_8888, false);
-                    if (cpuBitmap == null) {
-                        throw new IllegalStateException("copy from hardware bitmap returned null");
-                    }
-                    return new CaptureResult(cpuBitmap, colorSpaceToProtocol(colorSpace));
-                } finally {
-                    hardwareBitmap.recycle();
-                }
-            } finally {
-                hardwareBuffer.close();
-            }
-        }
-    }
-
-    private static final class SurfaceCaptureBackend {
-        private static final int MAX_IMAGES = 2;
-        private final int width;
-        private final int height;
-        private final int rotation;
-        private final int layerStack;
-        private final ImageReader reader;
-        private final Surface surface;
-        private final IBinder displayToken;
-
-        SurfaceCaptureBackend(DisplayInfoSnapshot display) throws Exception {
-            width = display.width;
-            height = display.height;
-            rotation = display.rotation;
-            layerStack = display.layerStack;
-            reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, MAX_IMAGES);
-            surface = reader.getSurface();
-            displayToken = SurfaceControlBridge.createDisplay("arps-imagereader");
-            Rect rect = new Rect(0, 0, width, height);
-            SurfaceControlBridge.setDisplaySurface(displayToken, surface, rect, rect, layerStack);
-        }
-
-        boolean matches(DisplayInfoSnapshot display) {
-            return display.width == width
-                    && display.height == height
-                    && display.rotation == rotation
-                    && display.layerStack == layerStack;
-        }
-
-        CapturedFrame capture(DisplayInfoSnapshot display) throws Exception {
-            long acquireStartNs = SystemClock.elapsedRealtimeNanos();
-            Image image = acquireLatestImage(120);
-            long acquireEndNs = SystemClock.elapsedRealtimeNanos();
-            if (image == null) {
-                throw new IllegalStateException("ImageReader produced no image");
-            }
-            try {
-                Image.Plane[] planes = image.getPlanes();
-                if (planes == null || planes.length == 0) {
-                    throw new IllegalStateException("ImageReader image has no planes");
-                }
-                Image.Plane plane = planes[0];
-                int pixelStride = plane.getPixelStride();
-                int srcRowStride = plane.getRowStride();
-                if (pixelStride < 4 || srcRowStride < width * pixelStride) {
-                    throw new IllegalStateException("Unsupported ImageReader plane stride: pixel="
-                            + pixelStride + " row=" + srcRowStride);
-                }
-
-                int rowBytes = width * 4;
-                byte[] raw = new byte[rowBytes * height];
-                ByteBuffer buffer = plane.getBuffer();
-                long copyStartNs = SystemClock.elapsedRealtimeNanos();
-                copyPlane(buffer, raw, width, height, pixelStride, srcRowStride, rowBytes);
-                long copyEndNs = SystemClock.elapsedRealtimeNanos();
-                return new CapturedFrame(raw, width, height, rowBytes, display.rotation,
-                        0, acquireStartNs, nanosToMillis(acquireEndNs - acquireStartNs),
-                        nanosToMillis(copyEndNs - copyStartNs),
-                        "android.media.ImageReader+SurfaceControl");
-            } finally {
-                image.close();
-            }
-        }
-
-        void close() {
-            SurfaceControlBridge.destroyDisplay(displayToken);
-            surface.release();
-            reader.close();
-        }
-
-        private Image acquireLatestImage(long timeoutMs) {
-            long deadline = SystemClock.uptimeMillis() + timeoutMs;
-            Image image;
-            do {
-                image = reader.acquireLatestImage();
-                if (image != null) {
-                    return image;
-                }
-                SystemClock.sleep(2);
-            } while (SystemClock.uptimeMillis() < deadline);
-            return null;
-        }
-
-        private static void copyPlane(ByteBuffer src, byte[] dst, int width, int height,
-                int pixelStride, int srcRowStride, int dstRowStride) {
-            byte[] pixel = pixelStride == 4 ? null : new byte[pixelStride];
-            for (int y = 0; y < height; y++) {
-                int srcRow = y * srcRowStride;
-                int dstRow = y * dstRowStride;
-                if (pixelStride == 4) {
-                    ByteBuffer row = src.duplicate();
-                    row.position(srcRow);
-                    row.get(dst, dstRow, dstRowStride);
-                } else {
-                    for (int x = 0; x < width; x++) {
-                        src.position(srcRow + x * pixelStride);
-                        src.get(pixel, 0, pixelStride);
-                        int out = dstRow + x * 4;
-                        dst[out] = pixel[0];
-                        dst[out + 1] = pixel[1];
-                        dst[out + 2] = pixel[2];
-                        dst[out + 3] = pixel[3];
-                    }
-                }
-            }
+            return new HardwareCaptureResult(hardwareBuffer, colorSpace,
+                    colorSpaceToProtocol(colorSpace));
         }
     }
 
@@ -324,6 +228,19 @@ final class ScreenCapturer implements AutoCloseable {
 
         CaptureResult(Bitmap bitmap, int colorSpace) {
             this.bitmap = bitmap;
+            this.colorSpace = colorSpace;
+        }
+    }
+
+    private static final class HardwareCaptureResult {
+        final HardwareBuffer hardwareBuffer;
+        final ColorSpace colorSpaceObject;
+        final int colorSpace;
+
+        HardwareCaptureResult(HardwareBuffer hardwareBuffer, ColorSpace colorSpaceObject,
+                int colorSpace) {
+            this.hardwareBuffer = hardwareBuffer;
+            this.colorSpaceObject = colorSpaceObject;
             this.colorSpace = colorSpace;
         }
     }

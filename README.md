@@ -123,9 +123,15 @@ host-debug/cli/build/arps-host-debug \
 ```
 
 常用参数：`--host` `--port` `--compression=raw|lz4_block` `--max-fps` `--display-id`
-`--turn-screen-off` `--keep-screen-on` `--capture-mode=auto|surface|bitmap`
+`--turn-screen-off` `--keep-screen-on` `--capture-mode=auto|hardware|bitmap`
 `--stream-mode=push|pull` `--exit-power-mode=restore_previous|keep_on|turn_off`
 `--serial` `--apk` `--adb`。
+
+`capture-mode=hardware` 仅在 `lz4_block` 下使用
+`ScreenCapture.captureDisplay + AHardwareBuffer lock + JNI LZ4` 直接压缩
+`HardwareBuffer`；`bitmap` 保留旧的 `Bitmap.copy + copyPixelsToBuffer` 路径；
+`auto` 优先尝试 `hardware`，失败后回退到 `bitmap`。该路径只额外链接 Android 系统
+`libandroid.so` 以访问 NDK `AHardwareBuffer` API，未引入新的第三方依赖。
 
 ### 无设备验证主机链路（mock-source）
 

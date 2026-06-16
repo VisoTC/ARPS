@@ -4,7 +4,7 @@ import java.util.Locale;
 
 enum CaptureMode {
     AUTO,
-    SURFACE,
+    HARDWARE,
     BITMAP;
 
     static CaptureMode parse(String value) {
@@ -12,9 +12,9 @@ enum CaptureMode {
         if ("auto".equals(normalized)) {
             return AUTO;
         }
-        if ("surface".equals(normalized) || "imagereader".equals(normalized)
-                || "image_reader".equals(normalized)) {
-            return SURFACE;
+        if ("hardware".equals(normalized) || "hardware_buffer".equals(normalized)
+                || "ahardwarebuffer".equals(normalized)) {
+            return HARDWARE;
         }
         if ("bitmap".equals(normalized) || "capture_display".equals(normalized)) {
             return BITMAP;

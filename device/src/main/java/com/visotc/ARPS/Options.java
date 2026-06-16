@@ -169,7 +169,7 @@ final class Options {
                 + "--connect-port=<port> [--connect-host=127.0.0.1] "
                 + "[--compression=raw|lz4_block] [--max-fps=30] "
                 + "[--keep-screen-on=true|false] "
-                + "[--capture-mode=auto|surface|bitmap] "
+                + "[--capture-mode=auto|hardware|bitmap] "
                 + "[--stream-mode=push|pull]";
     }
 }

@@ -173,7 +173,19 @@ final class ArpsClient {
     }
 
     private PreparedFrame captureAndCompress(ScreenCapturer capturer) throws Exception {
+        if (options.compressionType == CompressionType.LZ4_BLOCK) {
+            CapturedFrame hardwareFrame = capturer.captureHardwareLz4(options.displayId);
+            if (hardwareFrame != null) {
+                return new PreparedFrame(hardwareFrame, hardwareFrame.precompressedPayload,
+                        hardwareFrame.precompressedMs);
+            }
+        }
+
         CapturedFrame frame = capturer.capture(options.displayId);
+        if (frame.precompressedPayload != null) {
+            return new PreparedFrame(frame, frame.precompressedPayload, frame.precompressedMs);
+        }
+
         long compressStartNs = SystemClock.elapsedRealtimeNanos();
 
         byte[] payload;

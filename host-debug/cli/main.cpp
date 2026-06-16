@@ -103,7 +103,7 @@ void PrintUsage(const char* argv0) {
             << "       [--compression=raw|lz4_block] [--max-fps=30]\n"
             << "       [--display-id=0] [--turn-screen-off=true|false]\n"
             << "       [--keep-screen-on=true|false]\n"
-            << "       [--capture-mode=auto|surface|bitmap]\n"
+            << "       [--capture-mode=auto|hardware|bitmap]\n"
             << "       [--stream-mode=push|pull]\n"
             << "       [--exit-power-mode=restore_previous|keep_on|turn_off]\n"
             << "       [--serial=<adb-serial>] [--apk=<path>] [--adb=adb]\n";
@@ -158,7 +158,7 @@ bool ParseArgs(int argc, char** argv, Args* args) {
                 return false;
             }
         } else if (key == "capture-mode") {
-            if (value != "auto" && value != "surface" && value != "bitmap") {
+            if (value != "auto" && value != "hardware" && value != "bitmap") {
                 std::cerr << "Invalid --capture-mode\n";
                 return false;
             }

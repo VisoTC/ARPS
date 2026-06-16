@@ -65,7 +65,7 @@ final class ProtocolWriter {
         buffer.putInt(frame.rotation);
         buffer.putInt(Protocol.PIXEL_FORMAT_ANDROID_ARGB_8888_RAW);
         buffer.putInt(compressionType);
-        buffer.putInt(frame.raw.length);
+        buffer.putInt(frame.uncompressedLen);
         buffer.putInt(compressedLen);
         buffer.putInt(0);
         buffer.putInt(frame.colorSpace);
@@ -82,6 +82,16 @@ final class ProtocolWriter {
                 + "\"capture_ms\":" + frame.captureMs + ","
                 + "\"copy_ms\":" + frame.copyMs + ","
                 + "\"compress_ms\":" + compressMs
+                + hardwareExtData(frame)
                 + "}";
+    }
+
+    private String hardwareExtData(CapturedFrame frame) {
+        if (frame.hardwareLockMs < 0.0) {
+            return "";
+        }
+        return ",\"lock_ms\":" + frame.hardwareLockMs
+                + ",\"hardware_buffer_format\":" + frame.hardwareBufferFormat
+                + ",\"hardware_buffer_usage\":" + frame.hardwareBufferUsage;
     }
 }

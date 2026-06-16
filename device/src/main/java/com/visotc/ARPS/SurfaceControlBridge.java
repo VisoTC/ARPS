@@ -1,10 +1,8 @@
 package com.visotc.ARPS;
 
 import android.annotation.SuppressLint;
-import android.graphics.Rect;
 import android.os.Build;
 import android.os.IBinder;
-import android.view.Surface;
 
 import java.lang.reflect.Method;
 
@@ -67,43 +65,6 @@ final class SurfaceControlBridge {
             return false;
         }
         return setDisplayPowerMode(token, mode);
-    }
-
-    static IBinder createDisplay(String name) throws Exception {
-        Method method = CLASS.getMethod("createDisplay", String.class, boolean.class);
-        return (IBinder) method.invoke(null, name, false);
-    }
-
-    static void destroyDisplay(IBinder displayToken) {
-        if (displayToken == null) {
-            return;
-        }
-        try {
-            Method method = CLASS.getMethod("destroyDisplay", IBinder.class);
-            method.invoke(null, displayToken);
-        } catch (Throwable e) {
-            Log.e("SurfaceControl.destroyDisplay failed", e);
-        }
-    }
-
-    static void setDisplaySurface(IBinder displayToken, Surface surface,
-            Rect deviceRect, Rect displayRect, int layerStack) throws Exception {
-        Method openTransaction = CLASS.getMethod("openTransaction");
-        Method closeTransaction = CLASS.getMethod("closeTransaction");
-        Method setDisplaySurface = CLASS.getMethod("setDisplaySurface",
-                IBinder.class, Surface.class);
-        Method setDisplayProjection = CLASS.getMethod("setDisplayProjection",
-                IBinder.class, int.class, Rect.class, Rect.class);
-        Method setDisplayLayerStack = CLASS.getMethod("setDisplayLayerStack",
-                IBinder.class, int.class);
-        openTransaction.invoke(null);
-        try {
-            setDisplaySurface.invoke(null, displayToken, surface);
-            setDisplayProjection.invoke(null, displayToken, 0, deviceRect, displayRect);
-            setDisplayLayerStack.invoke(null, displayToken, layerStack);
-        } finally {
-            closeTransaction.invoke(null);
-        }
     }
 
     private static Class<?> initClass() {

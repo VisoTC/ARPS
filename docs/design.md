@@ -57,7 +57,8 @@ arps-device.apk
 
 选择 apk 的原因是它可以同时承载 dex 和 `lib/<abi>/liblz4arps.so`，并可作为
 `CLASSPATH` 交给 `app_process` 运行。设备端启动时通过 `CLASSPATH` 定位自身 apk，
-从 zip 中解出当前 ABI 的 native 库到 `/data/local/tmp`，再执行 `System.load`。
+从 zip 中解出当前 ABI 的 native 库到 `/data/local/tmp` 下的唯一临时文件，执行
+`System.load` 后尽量删除临时文件。
 
 启动示例：
 
@@ -276,6 +277,11 @@ ExtData    = UTF-8 JSON
 
 `START` 由主机端发送，设备端收到后先完成预热，再进入指定流模式。`stream_mode`
 缺省为 `push`。`max_fps` 只在 push 模式下节流；pull 模式忽略它。
+`capture_mode=hardware` 在 `lz4_block` 下使用 `ScreenCapture.captureDisplay` 返回的
+`HardwareBuffer`，直接通过 JNI 调用 NDK `AHardwareBuffer_lock` 后用同一个
+`liblz4arps.so` 压缩；`bitmap` 保留旧的 `Bitmap.copy + copyPixelsToBuffer`
+路径；`auto` 优先尝试 `hardware`，失败后回退到 `bitmap`。`raw` 压缩类型始终走
+`bitmap` 路径，因为 direct HardwareBuffer 路径产物已经是 LZ4 block。
 
 ```json
 {
@@ -300,9 +306,10 @@ push 帧或发送 pull 请求。
 {
   "stream_mode": "pull",
   "compression": "lz4_block",
-  "capture_api": "android.media.ImageReader+SurfaceControl",
-  "capture_ms": 18.42,
-  "copy_ms": 2.11,
+  "capture_api": "android.window.ScreenCapture.captureDisplay+AHardwareBuffer",
+  "capture_ms": 8.42,
+  "copy_ms": 0.0,
+  "lock_ms": 0.24,
   "compress_ms": 4.36
 }
 ```
@@ -389,14 +396,19 @@ offset  size  field
 
 ```json
 {
-  "capture_api": "android.window.ScreenCapture.captureDisplay",
+  "capture_api": "android.window.ScreenCapture.captureDisplay+AHardwareBuffer",
   "android_sdk": 35,
   "compression": "lz4_block",
   "capture_ms": 5.31,
-  "copy_ms": 1.42,
+  "copy_ms": 0.0,
+  "lock_ms": 0.24,
   "compress_ms": 2.08
 }
 ```
+
+`copy_ms` 表示设备端将像素复制进 Java `byte[]` 的耗时；direct HardwareBuffer
+路径不需要这一步，因此为 0。`lock_ms` 仅在 direct HardwareBuffer 路径出现，
+表示 native 侧锁定 `AHardwareBuffer` 供 CPU 读取的耗时。
 
 ## 接收端校验
 

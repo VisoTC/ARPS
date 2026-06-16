@@ -107,12 +107,18 @@ host-debug\build-win\Release\arps-host-debug.exe `
 - `--display-id=0`
 - `--turn-screen-off=true|false`
 - `--keep-screen-on=true|false`
-- `--capture-mode=auto|surface|bitmap`
+- `--capture-mode=auto|hardware|bitmap`
 - `--stream-mode=push|pull`
 - `--exit-power-mode=restore_previous|keep_on|turn_off`
 - `--serial=<adb-serial>`
 - `--apk=<path>`
 - `--adb=<adb-binary>`
+
+`--capture-mode=hardware` 在 `lz4_block` 下使用
+`ScreenCapture.captureDisplay + AHardwareBuffer lock + JNI LZ4` 直接压缩
+`HardwareBuffer`；`bitmap` 保留旧的 `Bitmap.copy + copyPixelsToBuffer` 路径；
+`auto` 优先尝试 `hardware`，失败后回退到 `bitmap`。该模式只链接 Android 系统
+`libandroid.so` 访问 NDK `AHardwareBuffer` API，不增加新的第三方库。
 
 ## `host-debug/mock-source`
 

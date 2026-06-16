@@ -1,6 +1,7 @@
 package com.visotc.ARPS;
 
 import android.os.Build;
+import android.hardware.HardwareBuffer;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -66,6 +67,37 @@ final class Lz4 {
         return Arrays.copyOf(dst, written);
     }
 
+    static HardwareBufferCompression compressHardwareBuffer(HardwareBuffer buffer)
+            throws IOException {
+        long[] metrics = new long[10];
+        int uncompressedLen = nativeHardwareBufferInfo(buffer, metrics);
+        if (uncompressedLen <= 0) {
+            throw new IOException("Unsupported HardwareBuffer format=" + metrics[2]
+                    + " stride=" + metrics[3] + " usage=" + metrics[4]
+                    + " uncompressed_len=" + metrics[5]);
+        }
+
+        int bound = nativeCompressBound(uncompressedLen);
+        if (bound <= 0) {
+            throw new IOException("Invalid LZ4 compress bound for HardwareBuffer len="
+                    + uncompressedLen);
+        }
+        byte[] dst = new byte[bound];
+        int written = nativeCompressHardwareBuffer(buffer, dst, dst.length, metrics);
+        if (written <= 0) {
+            throw new IOException("HardwareBuffer LZ4 compression failed format=" + metrics[2]
+                    + " stride=" + metrics[3] + " usage=" + metrics[4]
+                    + " lock_result=" + metrics[9]
+                    + " lock_ms=" + nanosToMillis(metrics[6])
+                    + " total_ms=" + nanosToMillis(metrics[8]));
+        }
+        return new HardwareBufferCompression(Arrays.copyOf(dst, written),
+                (int) metrics[0], (int) metrics[1], (int) metrics[3] * 4,
+                uncompressedLen, (int) metrics[2], metrics[4],
+                nanosToMillis(metrics[6]), nanosToMillis(metrics[7]),
+                nanosToMillis(metrics[8]));
+    }
+
     private static void extractAndLoad(File apk) throws IOException {
         try (ZipFile zip = new ZipFile(apk)) {
             String abi = findSupportedAbi(zip);
@@ -116,7 +148,44 @@ final class Lz4 {
         return null;
     }
 
+    private static double nanosToMillis(long ns) {
+        return ns / 1000000.0;
+    }
+
+    static final class HardwareBufferCompression {
+        final byte[] payload;
+        final int width;
+        final int height;
+        final int rowBytes;
+        final int uncompressedLen;
+        final int format;
+        final long usage;
+        final double lockMs;
+        final double compressMs;
+        final double totalMs;
+
+        HardwareBufferCompression(byte[] payload, int width, int height, int rowBytes,
+                int uncompressedLen, int format, long usage, double lockMs, double compressMs,
+                double totalMs) {
+            this.payload = payload;
+            this.width = width;
+            this.height = height;
+            this.rowBytes = rowBytes;
+            this.uncompressedLen = uncompressedLen;
+            this.format = format;
+            this.usage = usage;
+            this.lockMs = lockMs;
+            this.compressMs = compressMs;
+            this.totalMs = totalMs;
+        }
+    }
+
     private static native int nativeCompressBound(int inputSize);
 
     private static native int nativeCompress(byte[] src, int srcLen, byte[] dst, int dstCapacity);
+
+    private static native int nativeHardwareBufferInfo(HardwareBuffer buffer, long[] metrics);
+
+    private static native int nativeCompressHardwareBuffer(HardwareBuffer buffer, byte[] dst,
+            int dstCapacity, long[] metrics);
 }
