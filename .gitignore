@@ -4,6 +4,8 @@
 .idea/
 *.iml
 local.properties
+AGENTS.override.md
+CLAUDE.override.md
 
 # Gradle and Android build outputs
 .gradle/
