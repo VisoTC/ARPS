@@ -118,7 +118,7 @@ host-debug/cli/build/arps-host-debug \
 ```
 
 常用参数：`--host` `--port` `--compression=raw|lz4_block` `--max-fps` `--display-id`
-`--turn-screen-off` `--require-non-black-start` `--capture-mode=auto|surface|bitmap`
+`--turn-screen-off` `--keep-screen-on` `--capture-mode=auto|surface|bitmap`
 `--exit-power-mode=restore_previous|keep_on|turn_off` `--serial` `--apk` `--adb`。
 
 ### 无设备验证主机链路（mock-source）

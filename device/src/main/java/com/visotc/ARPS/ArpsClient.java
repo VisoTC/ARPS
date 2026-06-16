@@ -15,10 +15,6 @@ import java.nio.charset.StandardCharsets;
 final class ArpsClient {
     private static final int CONNECT_TIMEOUT_MS = 5000;
     private static final int START_TIMEOUT_MS = 10000;
-    private static final int NON_BLACK_WARMUP_ATTEMPTS = 3;
-    private static final int BLACK_RGB_THRESHOLD = 8;
-    private static final int BLACK_SAMPLE_STEP_PIXELS = 97;
-    private static final double BLACK_RATIO_THRESHOLD = 0.985;
     private static final long NANOS_PER_SECOND = 1000000000L;
 
     private final Options options;
@@ -68,6 +64,9 @@ final class ArpsClient {
                 powerController.pressPower(options.displayId);
                 SystemClock.sleep(500);
             }
+            if (options.keepScreenOn) {
+                powerController.acquireWakeLock(options.displayId);
+            }
 
             streamFrames();
             if (!stopRequested && writer != null) {
@@ -110,9 +109,6 @@ final class ArpsClient {
         long frameIntervalNs = options.maxFps > 0 ? NANOS_PER_SECOND / options.maxFps : 0;
 
         try {
-            if (options.requireNonBlackStart) {
-                ensureNonBlackStart(capturer);
-            }
             while (!stopRequested) {
                 long loopStartNs = SystemClock.elapsedRealtimeNanos();
                 CapturedFrame frame = capturer.capture(options.displayId);
@@ -148,50 +144,6 @@ final class ArpsClient {
         } finally {
             capturer.close();
         }
-    }
-
-    private void ensureNonBlackStart(ScreenCapturer capturer) throws Exception {
-        for (int attempt = 1; attempt <= NON_BLACK_WARMUP_ATTEMPTS; attempt++) {
-            CapturedFrame frame = capturer.capture(options.displayId);
-            if (!isMostlyBlack(frame)) {
-                Log.i("Startup warm-up frame is non-black via " + frame.captureApi
-                        + " on attempt " + attempt);
-                return;
-            }
-            Log.e("Startup warm-up frame is mostly black on attempt " + attempt);
-            if (options.powerOnIfScreenOff) {
-                powerController.pressPower(options.displayId);
-            }
-            SystemClock.sleep(500);
-        }
-        throw new IOException("Startup refused: captured frames are still mostly black");
-    }
-
-    private static boolean isMostlyBlack(CapturedFrame frame) {
-        int pixelCount = frame.width * frame.height;
-        if (pixelCount <= 0 || frame.raw.length < 4) {
-            return true;
-        }
-        int samples = 0;
-        int black = 0;
-        for (int pixel = 0; pixel < pixelCount; pixel += BLACK_SAMPLE_STEP_PIXELS) {
-            int row = pixel / frame.width;
-            int col = pixel - row * frame.width;
-            int offset = row * frame.rowBytes + col * 4;
-            if (offset + 2 >= frame.raw.length) {
-                continue;
-            }
-            int r = frame.raw[offset] & 0xff;
-            int g = frame.raw[offset + 1] & 0xff;
-            int b = frame.raw[offset + 2] & 0xff;
-            if (r <= BLACK_RGB_THRESHOLD
-                    && g <= BLACK_RGB_THRESHOLD
-                    && b <= BLACK_RGB_THRESHOLD) {
-                black++;
-            }
-            samples++;
-        }
-        return samples == 0 || ((double) black / samples) >= BLACK_RATIO_THRESHOLD;
     }
 
     private JSONObject buildHello() throws Exception {
@@ -241,6 +193,7 @@ final class ArpsClient {
         }
         cleanupDone = true;
         try {
+            powerController.releaseWakeLock();
             powerController.applyExitMode(options.displayId, previousScreenOn, options.exitPowerMode);
         } catch (Throwable e) {
             Log.e("Failed to restore screen power", e);

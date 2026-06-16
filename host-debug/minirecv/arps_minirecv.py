@@ -130,6 +130,7 @@ def main():
         "max_packet_len": max_packet_len,
         "power_on_if_screen_off": True,
         "turn_screen_off": False,
+        "keep_screen_on": True,
         "exit_power_mode": "restore_previous",
     }
 

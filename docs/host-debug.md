@@ -104,7 +104,7 @@ host-debug\build-win\Release\arps-host-debug.exe `
 - `--max-fps=30`
 - `--display-id=0`
 - `--turn-screen-off=true|false`
-- `--require-non-black-start=true|false`
+- `--keep-screen-on=true|false`
 - `--capture-mode=auto|surface|bitmap`
 - `--exit-power-mode=restore_previous|keep_on|turn_off`
 - `--serial=<adb-serial>`

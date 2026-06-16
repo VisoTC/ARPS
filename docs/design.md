@@ -128,14 +128,18 @@ TCP 提供有序可靠字节流，但它不表达“只要最新帧”的语义�
 
 设备端记录连接前屏幕状态，并支持以下启动配置：
 
-- `power_on_if_screen_off`：启动时如果主屏熄灭，注入 POWER 键点亮。
+- `power_on_if_screen_off`：启动时如果主屏已熄灭，注入一次 POWER 键点亮。
 - `turn_screen_off`：开始推流后尝试关闭物理屏幕输出。
-- `require_non_black_start`：启动阶段检查黑帧，连续黑帧时拒绝推流。
+- `keep_screen_on`：推流期间通过 `IPowerManager` 的 screen WakeLock 防止系统自动熄屏。
 - `exit_power_mode`：退出时 `restore_previous`、`keep_on` 或 `turn_off`。
 
 关闭物理屏幕输出和按 POWER 键关屏不是同一层能力。前者面向“物理屏幕熄灭但采集仍
 继续”的场景；后者会改变设备实际屏幕状态。不同厂商和 Android 版本可能存在差异，
 失败时应记录真实错误和设备信息，而不是静默回退。
+
+`keep_screen_on` 不修改系统 `screen_off_timeout`，也不做轮询守护；它只覆盖 ARPS 推
+流期间的系统自动熄屏，不承诺覆盖用户手动按 POWER 或厂商强制省电策略。WakeLock 获
+取失败时设备端发送 `ERROR` 并退出。
 
 ## 像素与压缩约定
 
@@ -270,7 +274,7 @@ ExtData    = UTF-8 JSON
   "max_packet_len": 67108864,
   "power_on_if_screen_off": true,
   "turn_screen_off": false,
-  "require_non_black_start": true,
+  "keep_screen_on": true,
   "capture_mode": "auto",
   "exit_power_mode": "restore_previous"
 }

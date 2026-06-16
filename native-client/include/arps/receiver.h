@@ -17,7 +17,7 @@ struct ArpsStartOptions {
     std::uint32_t max_packet_len = kDefaultMaxPacketLen;
     bool power_on_if_screen_off = true;
     bool turn_screen_off = false;
-    bool require_non_black_start = true;
+    bool keep_screen_on = true;
     std::string capture_mode = "auto";
     std::string exit_power_mode = "restore_previous";
 

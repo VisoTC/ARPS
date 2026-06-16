@@ -473,8 +473,7 @@ std::string ArpsStartOptions::ToJson() const {
         << "\"max_packet_len\":" << max_packet_len << ","
         << "\"power_on_if_screen_off\":" << (power_on_if_screen_off ? "true" : "false") << ","
         << "\"turn_screen_off\":" << (turn_screen_off ? "true" : "false") << ","
-        << "\"require_non_black_start\":"
-        << (require_non_black_start ? "true" : "false") << ","
+        << "\"keep_screen_on\":" << (keep_screen_on ? "true" : "false") << ","
         << "\"capture_mode\":\"" << capture_mode << "\","
         << "\"exit_power_mode\":\"" << exit_power_mode << "\""
         << "}";

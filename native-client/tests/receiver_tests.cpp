@@ -72,6 +72,13 @@ void RecvAll(arps::ArpsSocket socket, std::uint8_t* data, std::size_t len) {
     }
 }
 
+std::uint32_t ReadBe32(const std::uint8_t* data) {
+    return (static_cast<std::uint32_t>(data[0]) << 24)
+            | (static_cast<std::uint32_t>(data[1]) << 16)
+            | (static_cast<std::uint32_t>(data[2]) << 8)
+            | static_cast<std::uint32_t>(data[3]);
+}
+
 std::vector<std::uint8_t> FrameBase(std::uint32_t width, std::uint32_t height,
         std::uint32_t row_bytes, std::uint32_t compression_type,
         std::uint32_t uncompressed_len, std::uint32_t compressed_len) {
@@ -250,6 +257,16 @@ void TestSendStart() {
     CHECK(std::memcmp(header, arps::kMagic, arps::kMagicSize) == 0);
     CHECK(header[16] == 0);
     CHECK(header[17] == arps::kPacketStart);
+    std::uint32_t packet_len = ReadBe32(header + 28);
+    std::vector<std::uint8_t> packet(packet_len);
+    RecvAll(sockets[1], packet.data(), packet.size());
+    std::uint32_t base_len = ReadBe32(packet.data());
+    std::uint32_t bitmap_len = ReadBe32(packet.data() + 4 + base_len);
+    std::uint32_t ext_len = ReadBe32(packet.data() + 4 + base_len + 4 + bitmap_len);
+    const std::uint8_t* ext_data = packet.data() + 4 + base_len + 4 + bitmap_len + 4;
+    std::string ext(reinterpret_cast<const char*>(ext_data), ext_len);
+    CHECK(ext.find("\"keep_screen_on\":true") != std::string::npos);
+    CHECK(ext.find("require_non_black_start") == std::string::npos);
     compat::Close(sockets[1]);
 }
 

@@ -13,7 +13,7 @@ final class Options {
     int maxPacketLen = DEFAULT_MAX_PACKET_LEN;
     boolean powerOnIfScreenOff = true;
     boolean turnScreenOff = false;
-    boolean requireNonBlackStart = true;
+    boolean keepScreenOn = true;
     CaptureMode captureMode = CaptureMode.AUTO;
     ExitPowerMode exitPowerMode = ExitPowerMode.RESTORE_PREVIOUS;
 
@@ -64,9 +64,8 @@ final class Options {
         if (json.has("turn_screen_off")) {
             turnScreenOff = json.optBoolean("turn_screen_off", turnScreenOff);
         }
-        if (json.has("require_non_black_start")) {
-            requireNonBlackStart = json.optBoolean("require_non_black_start",
-                    requireNonBlackStart);
+        if (json.has("keep_screen_on")) {
+            keepScreenOn = json.optBoolean("keep_screen_on", keepScreenOn);
         }
         if (json.has("capture_mode")) {
             captureMode = CaptureMode.parse(json.optString("capture_mode"));
@@ -103,8 +102,8 @@ final class Options {
             case "turn-screen-off":
                 turnScreenOff = parseBoolean(key, value);
                 break;
-            case "require-non-black-start":
-                requireNonBlackStart = parseBoolean(key, value);
+            case "keep-screen-on":
+                keepScreenOn = parseBoolean(key, value);
                 break;
             case "capture-mode":
                 captureMode = CaptureMode.parse(value);
@@ -162,6 +161,7 @@ final class Options {
         return "Usage: app_process / com.visotc.ARPS.Main "
                 + "--connect-port=<port> [--connect-host=127.0.0.1] "
                 + "[--compression=raw|lz4_block] [--max-fps=30] "
+                + "[--keep-screen-on=true|false] "
                 + "[--capture-mode=auto|surface|bitmap]";
     }
 }

@@ -41,7 +41,7 @@ struct Args {
     std::uint32_t max_fps = 30;
     std::uint32_t display_id = 0;
     bool turn_screen_off = false;
-    bool require_non_black_start = true;
+    bool keep_screen_on = true;
     std::string capture_mode = "auto";
     std::string exit_power_mode = "restore_previous";
     std::string serial;
@@ -101,8 +101,8 @@ void PrintUsage(const char* argv0) {
             << "Usage: " << argv0 << " [--host=127.0.0.1] [--port=27183]\n"
             << "       [--compression=raw|lz4_block] [--max-fps=30]\n"
             << "       [--display-id=0] [--turn-screen-off=true|false]\n"
+            << "       [--keep-screen-on=true|false]\n"
             << "       [--capture-mode=auto|surface|bitmap]\n"
-            << "       [--require-non-black-start=true|false]\n"
             << "       [--exit-power-mode=restore_previous|keep_on|turn_off]\n"
             << "       [--serial=<adb-serial>] [--apk=<path>] [--adb=adb]\n";
 }
@@ -150,9 +150,9 @@ bool ParseArgs(int argc, char** argv, Args* args) {
                 std::cerr << "Invalid --turn-screen-off\n";
                 return false;
             }
-        } else if (key == "require-non-black-start") {
-            if (!ParseBool(value, &args->require_non_black_start)) {
-                std::cerr << "Invalid --require-non-black-start\n";
+        } else if (key == "keep-screen-on") {
+            if (!ParseBool(value, &args->keep_screen_on)) {
+                std::cerr << "Invalid --keep-screen-on\n";
                 return false;
             }
         } else if (key == "capture-mode") {
@@ -196,6 +196,7 @@ std::string PosixShellQuote(const std::string& value) {
     return out;
 }
 
+#ifdef _WIN32
 std::string WindowsShellQuote(const std::string& value) {
     std::string out = "\"";
     std::size_t backslashes = 0;
@@ -217,7 +218,6 @@ std::string WindowsShellQuote(const std::string& value) {
     return out;
 }
 
-#ifdef _WIN32
 std::wstring Utf8ToWide(const std::string& value) {
     if (value.empty()) {
         return std::wstring();
@@ -819,7 +819,7 @@ int main(int argc, char** argv) {
     start.compression = args.compression;
     start.max_fps = args.max_fps;
     start.turn_screen_off = args.turn_screen_off;
-    start.require_non_black_start = args.require_non_black_start;
+    start.keep_screen_on = args.keep_screen_on;
     start.capture_mode = args.capture_mode;
     start.exit_power_mode = args.exit_power_mode;
     if (!receiver.SendStart(start, &error)) {

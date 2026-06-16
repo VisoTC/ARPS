@@ -11,3 +11,6 @@ target_include_directories(lz4arps PRIVATE
 
 target_compile_definitions(lz4arps PRIVATE
         LZ4_HEAPMODE=1)
+
+target_link_options(lz4arps PRIVATE
+        -Wl,-z,max-page-size=16384)
