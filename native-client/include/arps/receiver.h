@@ -59,6 +59,9 @@ public:
     bool AdoptConnectedSocket(ArpsSocket socket, std::string* error);
     bool SendStart(const ArpsStartOptions& options, std::string* error);
     bool RequestFrame(std::string* error);
+    bool SendPowerControl(bool keep_screen_on, bool power_on_if_screen_off,
+            const std::string& reason, std::string* error);
+    bool SendStop(const std::string& reason, std::string* error);
     ArpsReadResult ReadNext(int timeout_ms);
     void Close();
 

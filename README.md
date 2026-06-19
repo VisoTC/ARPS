@@ -16,7 +16,7 @@ ARPS 在 Android shell 环境通过 `app_process` 运行（不安装为普通应
 - native LZ4 压缩（`liblz4arps.so`），无纯 Java 回退路径。
 - 设备端以 `app_process` 启动，不安装 apk，不保留 Activity / UI。
 - 启动时可点亮屏幕、可选关闭物理屏幕输出、退出时恢复或设置屏幕状态。
-- 明确的二进制协议 v1，承载帧数据、控制消息、错误消息和扩展字段。
+- 明确的二进制协议 v1.1，承载帧数据、控制消息、错误消息和扩展字段。
 
 ### 非目标
 
@@ -50,6 +50,7 @@ host   -> START
 device -> READY
 push: device -> FRAME...
 pull: host -> FRAME_REQUEST, device -> FRAME
+host   -> POWER_CONTROL
 host closes socket or device sends STOP/ERROR
 ```
 
@@ -156,15 +157,15 @@ python3 host-debug/minirecv/arps_minirecv.py \
 `minirecv --stream-mode pull` 会在 `START.stream_mode` 中要求设备进入 pull 模式，
 因此配套设备命令无需重复传 `--stream-mode=pull`。
 
-## 协议 v1（概要）
+## 协议 v1.1（概要）
 
-ARPS v1 运行在单条有序 TCP 连接上，多字节整数一律 big-endian，包边界由长度字段划分
+ARPS v1.1 运行在单条有序 TCP 连接上，多字节整数一律 big-endian，包边界由长度字段划分
 （不依赖 TCP EOF）。
 
 ```text
 magic            = "ARPSBYVISOTC"   # 12 bytes ASCII
 protocol_major   = 1
-protocol_minor   = 0
+protocol_minor   = 1
 fixed_header_len = 32
 default_max_len  = 64 MiB
 ```
@@ -173,8 +174,15 @@ default_max_len  = 64 MiB
 `base_len + BaseData + bitmap_len + BitmapPayload + ext_len + ExtData + UnknownTail`。
 
 包类型：`1=HELLO` `2=START` `3=READY` `4=FRAME_REQUEST` `5=FRAME`
-`6=ERROR` `7=STOP`。控制包以 UTF-8 JSON 承载在 `ExtData`；`FRAME` 在 64 字节
-定长 `BaseData` 中携带帧元数据，`BitmapPayload` 为 `raw` 或 `lz4_block` 压缩像素。
+`6=ERROR` `7=STOP` `8=POWER_CONTROL`。控制包以 UTF-8 JSON 承载在 `ExtData`；
+`FRAME` 在 64 字节定长 `BaseData` 中携带帧元数据，`BitmapPayload` 为 `raw` 或
+`lz4_block` 压缩像素。
+
+`START.power_on_if_screen_off` 负责新连接或重新 init ARPS 时按需点亮。复用已有连接
+执行下一轮任务时，主机端应发送 `POWER_CONTROL`：
+`{"keep_screen_on":true,"power_on_if_screen_off":true,"reason":"task_start"}`。
+任务结束只发送 `{"keep_screen_on":false,"reason":"task_end"}` 释放 wake lock，不
+发送 `STOP`、不重发 `START`、不触发 `exit_power_mode`。
 
 像素约定：每像素 4 字节，内存顺序按 `R, G, B, A` 解释；行寻址必须使用 `row_bytes`，
 不得假设等于 `width * 4`，但接收端必须拒绝小于 `width * 4` 的 `row_bytes`。

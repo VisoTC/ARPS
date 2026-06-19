@@ -6,6 +6,7 @@ import android.os.SystemClock;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.EOFException;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
@@ -25,6 +26,7 @@ final class ArpsClient {
     private boolean cleanupDone;
     private boolean previousScreenOn;
     private boolean powerStateKnown;
+    private volatile boolean pushControlReaderRunning;
 
     ArpsClient(Options options) {
         this.options = options;
@@ -123,26 +125,32 @@ final class ArpsClient {
             if (options.streamMode == StreamMode.PULL) {
                 streamPullFrames(reader, capturer, state);
             } else {
-                streamPushFrames(capturer, state);
+                streamPushFrames(reader, capturer, state);
             }
         } finally {
             capturer.close();
         }
     }
 
-    private void streamPushFrames(ScreenCapturer capturer, StreamState state) throws Exception {
+    private void streamPushFrames(ProtocolReader reader, ScreenCapturer capturer,
+            StreamState state) throws Exception {
         long frameIntervalNs = options.maxFps > 0 ? NANOS_PER_SECOND / options.maxFps : 0;
-        while (!stopRequested) {
-            long loopStartNs = SystemClock.elapsedRealtimeNanos();
-            writeNextFrame(capturer, state);
+        startPushControlReader(reader);
+        try {
+            while (!stopRequested) {
+                long loopStartNs = SystemClock.elapsedRealtimeNanos();
+                writeNextFrame(capturer, state);
 
-            if (frameIntervalNs > 0) {
-                long elapsedNs = SystemClock.elapsedRealtimeNanos() - loopStartNs;
-                long remainingNs = frameIntervalNs - elapsedNs;
-                if (remainingNs > 0) {
-                    SystemClock.sleep(remainingNs / 1000000L);
+                if (frameIntervalNs > 0) {
+                    long elapsedNs = SystemClock.elapsedRealtimeNanos() - loopStartNs;
+                    long remainingNs = frameIntervalNs - elapsedNs;
+                    if (remainingNs > 0) {
+                        SystemClock.sleep(remainingNs / 1000000L);
+                    }
                 }
             }
+        } finally {
+            pushControlReaderRunning = false;
         }
     }
 
@@ -152,11 +160,83 @@ final class ArpsClient {
             ProtocolReader.Packet request = reader.readPacket(options.maxPacketLen);
             if (request.type == Protocol.TYPE_FRAME_REQUEST) {
                 writeNextFrame(capturer, state);
+            } else if (request.type == Protocol.TYPE_POWER_CONTROL) {
+                applyPowerControl(request);
             } else if (request.type == Protocol.TYPE_STOP) {
                 stopRequested = true;
             } else {
-                throw new IOException("Expected FRAME_REQUEST packet, got type=" + request.type);
+                throw new IOException(
+                        "Expected FRAME_REQUEST, POWER_CONTROL, or STOP packet, got type="
+                                + request.type);
             }
+        }
+    }
+
+    private void startPushControlReader(ProtocolReader reader) throws SocketException {
+        Socket s = socket;
+        if (s == null) {
+            throw new SocketException("socket is not connected");
+        }
+        pushControlReaderRunning = true;
+        Thread thread = new Thread(() -> readPushControls(reader), "arps-push-control");
+        thread.setDaemon(true);
+        thread.start();
+    }
+
+    private void readPushControls(ProtocolReader reader) {
+        while (pushControlReaderRunning && !stopRequested) {
+            try {
+                ProtocolReader.Packet packet = reader.readPacket(options.maxPacketLen);
+                if (packet.type == Protocol.TYPE_POWER_CONTROL) {
+                    applyPowerControl(packet);
+                } else if (packet.type == Protocol.TYPE_STOP) {
+                    stopRequested = true;
+                    closeSocketQuietly();
+                    return;
+                } else {
+                    throw new IOException(
+                            "Expected POWER_CONTROL or STOP packet in push mode, got type="
+                                    + packet.type);
+                }
+            } catch (Throwable e) {
+                if (pushControlReaderRunning && !stopRequested && !isExpectedDisconnect(e)) {
+                    Log.e("Push control reader stopped with error", e);
+                }
+                stopRequested = true;
+                closeSocketQuietly();
+                return;
+            }
+        }
+    }
+
+    private void applyPowerControl(ProtocolReader.Packet packet) {
+        try {
+            JSONObject json = new JSONObject(new String(packet.ext, StandardCharsets.UTF_8));
+            if (!json.has("keep_screen_on")) {
+                Log.e("POWER_CONTROL missing keep_screen_on");
+                return;
+            }
+
+            boolean keepScreenOn = json.getBoolean("keep_screen_on");
+            boolean powerOnIfScreenOff = json.optBoolean("power_on_if_screen_off", false);
+            String reason = json.optString("reason", "runtime_power_control");
+
+            if (keepScreenOn) {
+                if (powerOnIfScreenOff && !powerController.isScreenOn(options.displayId)) {
+                    powerController.pressPower(options.displayId);
+                    SystemClock.sleep(500);
+                }
+                powerController.acquireWakeLock(options.displayId);
+            } else {
+                powerController.releaseWakeLock();
+            }
+
+            options.keepScreenOn = keepScreenOn;
+            Log.i("POWER_CONTROL keep_screen_on=" + keepScreenOn
+                    + " power_on_if_screen_off=" + powerOnIfScreenOff
+                    + " reason=" + reason + " ok");
+        } catch (Throwable e) {
+            Log.e("POWER_CONTROL failed", e);
         }
     }
 
@@ -218,6 +298,8 @@ final class ArpsClient {
         capabilities.put("max_packet_len", options.maxPacketLen);
         capabilities.put("native_lz4", true);
         capabilities.put("stream_modes", new JSONArray().put("push").put("pull"));
+        capabilities.put("runtime_power_control",
+                new JSONArray().put("keep_screen_on").put("power_on_if_screen_off"));
         root.put("capabilities", capabilities);
         return root;
     }
@@ -292,6 +374,9 @@ final class ArpsClient {
                         || message.contains("Broken pipe")
                         || message.contains("Socket closed")
                         || message.contains("Connection reset");
+            }
+            if (current instanceof EOFException) {
+                return true;
             }
             current = current.getCause();
         }

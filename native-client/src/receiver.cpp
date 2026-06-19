@@ -60,6 +60,46 @@ void WriteBe32(std::vector<std::uint8_t>& out, std::uint32_t value) {
     out.push_back(static_cast<std::uint8_t>(value & 0xff));
 }
 
+std::string JsonString(const std::string& value) {
+    static constexpr char kHex[] = "0123456789abcdef";
+    std::ostringstream out;
+    out << "\"";
+    for (unsigned char ch : value) {
+        switch (ch) {
+            case '\\':
+                out << "\\\\";
+                break;
+            case '"':
+                out << "\\\"";
+                break;
+            case '\b':
+                out << "\\b";
+                break;
+            case '\f':
+                out << "\\f";
+                break;
+            case '\n':
+                out << "\\n";
+                break;
+            case '\r':
+                out << "\\r";
+                break;
+            case '\t':
+                out << "\\t";
+                break;
+            default:
+                if (ch < 0x20) {
+                    out << "\\u00" << kHex[(ch >> 4) & 0xf] << kHex[ch & 0xf];
+                } else {
+                    out << static_cast<char>(ch);
+                }
+                break;
+        }
+    }
+    out << "\"";
+    return out.str();
+}
+
 double MsSince(std::chrono::steady_clock::time_point start) {
     using Duration = std::chrono::duration<double, std::milli>;
     return Duration(std::chrono::steady_clock::now() - start).count();
@@ -573,6 +613,24 @@ bool ArpsReceiver::SendStart(const ArpsStartOptions& options, std::string* error
 
 bool ArpsReceiver::RequestFrame(std::string* error) {
     return SendControlPacket(kPacketFrameRequest, "{}", error);
+}
+
+bool ArpsReceiver::SendPowerControl(bool keep_screen_on, bool power_on_if_screen_off,
+        const std::string& reason, std::string* error) {
+    std::ostringstream out;
+    out << "{"
+        << "\"keep_screen_on\":" << (keep_screen_on ? "true" : "false") << ","
+        << "\"power_on_if_screen_off\":"
+        << (power_on_if_screen_off ? "true" : "false") << ","
+        << "\"reason\":" << JsonString(reason)
+        << "}";
+    return SendControlPacket(kPacketPowerControl, out.str(), error);
+}
+
+bool ArpsReceiver::SendStop(const std::string& reason, std::string* error) {
+    std::ostringstream out;
+    out << "{\"reason\":" << JsonString(reason) << "}";
+    return SendControlPacket(kPacketStop, out.str(), error);
 }
 
 bool ArpsReceiver::SendControlPacket(std::uint16_t type, const std::string& ext,

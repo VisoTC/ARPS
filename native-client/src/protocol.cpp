@@ -18,6 +18,8 @@ const char* PacketTypeName(std::uint16_t type) {
             return "ERROR";
         case kPacketStop:
             return "STOP";
+        case kPacketPowerControl:
+            return "POWER_CONTROL";
         default:
             return "UNKNOWN";
     }

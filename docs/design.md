@@ -1,7 +1,7 @@
 # ARPS 项目设计
 
 本文档是 ARPS 的统一设计说明，面向后续维护者和最终接入开发者。内容覆盖项目目标、
-架构边界、运行形态、设备端与主机端职责，以及当前二进制协议 v1。
+架构边界、运行形态、设备端与主机端职责，以及当前二进制协议 v1.1。
 
 ## 项目定位
 
@@ -102,6 +102,7 @@ Wrapper 不是构建产物。它固定构建入口和 Gradle 版本，使 Orb De
 - 发送 `START` 配置。
 - 等待设备端 `READY`。
 - 在 pull 模式下发送 `FRAME_REQUEST`。
+- 在复用连接时发送运行期 `POWER_CONTROL`。
 - 读取 ARPS packet。
 - 校验协议字段。
 - 解压 `raw` 或 `lz4_block` payload。
@@ -125,13 +126,15 @@ device warmup capture/compress discard
 device -> READY
 push: device -> FRAME...
 pull: host -> FRAME_REQUEST, device -> FRAME
+host   -> POWER_CONTROL
 host closes socket or device sends STOP/ERROR
 ```
 
 TCP 提供有序可靠字节流。push 模式采取串行 `capture -> compress -> write` 模型：
 写阻塞时设备端不会继续无限制捕获新帧，从而避免内存队列堆积。`max_fps > 0` 只在
 push 模式下节流，`max_fps = 0` 表示不 sleep、尽快连续推帧。pull 模式由主机显式
-发送 `FRAME_REQUEST`，设备端每收到一次请求只采集、压缩并发送一帧。
+发送 `FRAME_REQUEST`，设备端每收到一次请求只采集、压缩并发送一帧。主机复用同一
+连接执行多轮任务时，可以在任务开始和结束发送 `POWER_CONTROL` 调整 wake lock。
 
 ## 屏幕电源策略
 
@@ -146,9 +149,15 @@ push 模式下节流，`max_fps = 0` 表示不 sleep、尽快连续推帧。pull
 继续”的场景；后者会改变设备实际屏幕状态。不同厂商和 Android 版本可能存在差异，
 失败时应记录真实错误和设备信息，而不是静默回退。
 
+`START.power_on_if_screen_off` 负责新连接或重新 init ARPS 时的按需点亮。复用已有
+ARPS 连接时，上一轮任务结束释放 wake lock 后，空闲期间屏幕可能再次熄灭；下一轮任
+务开始应通过 `POWER_CONTROL.power_on_if_screen_off=true` 重新按需点亮并申请 wake
+lock。
+
 `keep_screen_on` 不修改系统 `screen_off_timeout`，也不做轮询守护；它只覆盖 ARPS 推
-流期间的系统自动熄屏，不承诺覆盖用户手动按 POWER 或厂商强制省电策略。WakeLock 获
-取失败时设备端发送 `ERROR` 并退出。
+流期间的系统自动熄屏，不承诺覆盖用户手动按 POWER 或厂商强制省电策略。启动阶段
+WakeLock 获取失败时设备端发送 `ERROR` 并退出；运行期 `POWER_CONTROL` 失败只记录日
+志，不关闭截图通道。
 
 ## 像素与压缩约定
 
@@ -166,9 +175,9 @@ push 模式下节流，`max_fps = 0` 表示不 sleep、尽快连续推帧。pull
 
 `delta_lz4` 和扩展压缩类型仅保留枚举，当前实现拒绝。
 
-## 协议 v1
+## 协议 v1.1
 
-ARPS v1 运行在单条有序 TCP 连接上。所有多字节整数均使用 big-endian。协议不依赖
+ARPS v1.1 运行在单条有序 TCP 连接上。所有多字节整数均使用 big-endian。协议不依赖
 TCP EOF 划分包边界，每个包都必须通过长度字段完整读取。
 
 ### 常量
@@ -176,7 +185,7 @@ TCP EOF 划分包边界，每个包都必须通过长度字段完整读取。
 ```text
 magic            = "ARPSBYVISOTC"  # 12 bytes ASCII
 protocol_major   = 1
-protocol_minor   = 0
+protocol_minor   = 1
 fixed_header_len = 32
 default_max_len  = 64 MiB
 ```
@@ -238,13 +247,15 @@ offset  size  field
 5 = FRAME
 6 = ERROR
 7 = STOP
+8 = POWER_CONTROL
 ```
 
 未知 `packet_type` 应作为协议错误处理。
 
 ### Control Packets
 
-`HELLO`、`START`、`READY`、`FRAME_REQUEST`、`ERROR`、`STOP` 都使用同一包结构：
+`HELLO`、`START`、`READY`、`FRAME_REQUEST`、`ERROR`、`STOP`、`POWER_CONTROL`
+都使用同一包结构：
 
 ```text
 base_len   = 0
@@ -270,7 +281,8 @@ ExtData    = UTF-8 JSON
     "screen_power": true,
     "max_packet_len": 67108864,
     "native_lz4": true,
-    "stream_modes": ["push", "pull"]
+    "stream_modes": ["push", "pull"],
+    "runtime_power_control": ["keep_screen_on", "power_on_if_screen_off"]
   }
 }
 ```
@@ -321,6 +333,35 @@ push 帧或发送 pull 请求。
 {
 }
 ```
+
+`POWER_CONTROL` 由主机端在连接建立后的运行期发送，用于复用同一 ARPS 连接时控制
+wake lock 和按需点亮屏幕。它不需要 ACK；解析或电源操作失败时设备端只记录日志，不
+发送 `ERROR`，也不关闭连接。
+
+任务开始时：
+
+```json
+{
+  "keep_screen_on": true,
+  "power_on_if_screen_off": true,
+  "reason": "task_start"
+}
+```
+
+语义为：如果 `power_on_if_screen_off=true` 且当前熄屏，先注入 POWER 键点亮；如果
+`keep_screen_on=true`，申请 wake lock。
+
+任务结束时：
+
+```json
+{
+  "keep_screen_on": false,
+  "reason": "task_end"
+}
+```
+
+语义为：只释放 wake lock，不执行 `exit_power_mode`，不发送 `STOP`，不关闭 socket，
+不清理 adb reverse。
 
 `ERROR` 由设备端发送，表示设备端异常。主机端应记录并结束当前会话。
 
@@ -426,9 +467,10 @@ offset  size  field
 - `raw` payload 长度等于 `uncompressed_len`。
 - `lz4_block` 解压成功，且输出长度等于 `uncompressed_len`。
 
-控制包应作为状态返回给调用方，而不是静默丢弃。当前 C++ 接口使用
+设备端发往主机的控制包应作为状态返回给调用方，而不是静默丢弃。当前 C++ 接口使用
 `ArpsReadStatus` 区分 `Frame`、`Hello`、`Ready`、`Error`、`Stop`、`Timeout`、
-`Closed` 和 `ProtocolError`。
+`Closed` 和 `ProtocolError`。`POWER_CONTROL` 是 host -> device 包，native-client
+通过发送 API 暴露，不作为 `ReadNext()` 状态返回。
 
 ## 兼容性规则
 

@@ -51,7 +51,7 @@ final class PowerController {
         return SurfaceControlBridge.setDisplayPower(displayId, on);
     }
 
-    void acquireWakeLock(int displayId) throws Exception {
+    synchronized void acquireWakeLock(int displayId) throws Exception {
         if (wakeLockHeld) {
             return;
         }
@@ -62,7 +62,7 @@ final class PowerController {
         Log.i("acquireWakeLock(display_id=" + displayId + ") ok");
     }
 
-    void releaseWakeLock() {
+    synchronized void releaseWakeLock() {
         if (!wakeLockHeld) {
             return;
         }

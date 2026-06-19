@@ -293,6 +293,8 @@ void TestSendStart() {
     std::uint8_t header[arps::kHeaderLen];
     RecvAll(sockets[1], header, sizeof(header));
     CHECK(std::memcmp(header, arps::kMagic, arps::kMagicSize) == 0);
+    CHECK(header[14] == 0);
+    CHECK(header[15] == arps::kProtocolMinor);
     CHECK(header[16] == 0);
     CHECK(header[17] == arps::kPacketStart);
     std::uint32_t packet_len = ReadBe32(header + 28);
@@ -319,6 +321,8 @@ void TestRequestFrame() {
     std::uint8_t header[arps::kHeaderLen];
     RecvAll(sockets[1], header, sizeof(header));
     CHECK(std::memcmp(header, arps::kMagic, arps::kMagicSize) == 0);
+    CHECK(header[14] == 0);
+    CHECK(header[15] == arps::kProtocolMinor);
     CHECK(header[16] == 0);
     CHECK(header[17] == arps::kPacketFrameRequest);
     std::uint32_t packet_len = ReadBe32(header + 28);
@@ -335,6 +339,64 @@ void TestRequestFrame() {
     compat::Close(sockets[1]);
 }
 
+void TestSendPowerControl() {
+    arps::ArpsSocket sockets[2];
+    std::string error;
+    CHECK(compat::CreateConnectedSocketPair(sockets, &error));
+    arps::ArpsReceiver receiver;
+    CHECK(receiver.AdoptConnectedSocket(sockets[0], &error));
+    CHECK(receiver.SendPowerControl(true, true, "task_start", &error));
+    std::uint8_t header[arps::kHeaderLen];
+    RecvAll(sockets[1], header, sizeof(header));
+    CHECK(std::memcmp(header, arps::kMagic, arps::kMagicSize) == 0);
+    CHECK(header[14] == 0);
+    CHECK(header[15] == arps::kProtocolMinor);
+    CHECK(header[16] == 0);
+    CHECK(header[17] == arps::kPacketPowerControl);
+    std::uint32_t packet_len = ReadBe32(header + 28);
+    std::vector<std::uint8_t> packet(packet_len);
+    RecvAll(sockets[1], packet.data(), packet.size());
+    std::uint32_t base_len = ReadBe32(packet.data());
+    std::uint32_t bitmap_len = ReadBe32(packet.data() + 4 + base_len);
+    std::uint32_t ext_len = ReadBe32(packet.data() + 4 + base_len + 4 + bitmap_len);
+    const std::uint8_t* ext_data = packet.data() + 4 + base_len + 4 + bitmap_len + 4;
+    std::string ext(reinterpret_cast<const char*>(ext_data), ext_len);
+    CHECK(base_len == 0);
+    CHECK(bitmap_len == 0);
+    CHECK(ext.find("\"keep_screen_on\":true") != std::string::npos);
+    CHECK(ext.find("\"power_on_if_screen_off\":true") != std::string::npos);
+    CHECK(ext.find("\"reason\":\"task_start\"") != std::string::npos);
+    compat::Close(sockets[1]);
+}
+
+void TestSendStop() {
+    arps::ArpsSocket sockets[2];
+    std::string error;
+    CHECK(compat::CreateConnectedSocketPair(sockets, &error));
+    arps::ArpsReceiver receiver;
+    CHECK(receiver.AdoptConnectedSocket(sockets[0], &error));
+    CHECK(receiver.SendStop("host_stop", &error));
+    std::uint8_t header[arps::kHeaderLen];
+    RecvAll(sockets[1], header, sizeof(header));
+    CHECK(std::memcmp(header, arps::kMagic, arps::kMagicSize) == 0);
+    CHECK(header[14] == 0);
+    CHECK(header[15] == arps::kProtocolMinor);
+    CHECK(header[16] == 0);
+    CHECK(header[17] == arps::kPacketStop);
+    std::uint32_t packet_len = ReadBe32(header + 28);
+    std::vector<std::uint8_t> packet(packet_len);
+    RecvAll(sockets[1], packet.data(), packet.size());
+    std::uint32_t base_len = ReadBe32(packet.data());
+    std::uint32_t bitmap_len = ReadBe32(packet.data() + 4 + base_len);
+    std::uint32_t ext_len = ReadBe32(packet.data() + 4 + base_len + 4 + bitmap_len);
+    const std::uint8_t* ext_data = packet.data() + 4 + base_len + 4 + bitmap_len + 4;
+    std::string ext(reinterpret_cast<const char*>(ext_data), ext_len);
+    CHECK(base_len == 0);
+    CHECK(bitmap_len == 0);
+    CHECK(ext == "{\"reason\":\"host_stop\"}");
+    compat::Close(sockets[1]);
+}
+
 }  // namespace
 
 int main() {
@@ -346,6 +408,8 @@ int main() {
     TestProtocolErrors();
     TestSendStart();
     TestRequestFrame();
+    TestSendPowerControl();
+    TestSendStop();
     std::cout << "receiver_tests: ok\n";
     return 0;
 }

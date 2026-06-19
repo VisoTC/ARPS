@@ -7,6 +7,8 @@ from pathlib import Path
 
 
 MAGIC = b"ARPSBYVISOTC"
+PROTOCOL_MAJOR = 1
+PROTOCOL_MINOR = 1
 HEADER = struct.Struct(">12sHHHHIII")
 U32 = struct.Struct(">I")
 FRAME_BASE = struct.Struct(">QQIIIIIIIIIIII")
@@ -18,6 +20,7 @@ TYPE_FRAME_REQUEST = 4
 TYPE_FRAME = 5
 TYPE_ERROR = 6
 TYPE_STOP = 7
+TYPE_POWER_CONTROL = 8
 
 
 def read_exact(sock, length):
@@ -89,7 +92,8 @@ def read_packet(sock, max_packet_len):
 
 def write_packet(sock, packet_type, base=b"", bitmap=b"", ext=b"", sequence=1):
     packet_len = 4 + len(base) + 4 + len(bitmap) + 4 + len(ext)
-    sock.sendall(HEADER.pack(MAGIC, 1, 0, packet_type, HEADER.size, 0, sequence, packet_len))
+    sock.sendall(HEADER.pack(MAGIC, PROTOCOL_MAJOR, PROTOCOL_MINOR, packet_type,
+                              HEADER.size, 0, sequence, packet_len))
     sock.sendall(U32.pack(len(base)))
     sock.sendall(base)
     sock.sendall(U32.pack(len(bitmap)))
