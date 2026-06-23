@@ -100,6 +100,107 @@ std::string JsonString(const std::string& value) {
     return out.str();
 }
 
+void JsonFieldPrefix(std::ostringstream& out, bool* first, const char* key) {
+    if (!*first) {
+        out << ",";
+    }
+    *first = false;
+    out << "\"" << key << "\":";
+}
+
+std::size_t JsonFieldValuePos(const std::string& json, const char* key) {
+    std::string quoted = std::string("\"") + key + "\"";
+    std::size_t pos = json.find(quoted);
+    if (pos == std::string::npos) {
+        return std::string::npos;
+    }
+    pos = json.find(':', pos + quoted.size());
+    if (pos == std::string::npos) {
+        return std::string::npos;
+    }
+    ++pos;
+    while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t'
+                    || json[pos] == '\r' || json[pos] == '\n')) {
+        ++pos;
+    }
+    return pos;
+}
+
+bool JsonStringField(const std::string& json, const char* key, std::string* out) {
+    std::size_t pos = JsonFieldValuePos(json, key);
+    if (pos == std::string::npos || pos >= json.size() || json[pos] != '"') {
+        return false;
+    }
+    ++pos;
+    std::ostringstream value;
+    while (pos < json.size()) {
+        char ch = json[pos++];
+        if (ch == '"') {
+            *out = value.str();
+            return true;
+        }
+        if (ch == '\\' && pos < json.size()) {
+            char escaped = json[pos++];
+            switch (escaped) {
+                case '"':
+                case '\\':
+                case '/':
+                    value << escaped;
+                    break;
+                case 'b':
+                    value << '\b';
+                    break;
+                case 'f':
+                    value << '\f';
+                    break;
+                case 'n':
+                    value << '\n';
+                    break;
+                case 'r':
+                    value << '\r';
+                    break;
+                case 't':
+                    value << '\t';
+                    break;
+                default:
+                    value << escaped;
+                    break;
+            }
+        } else {
+            value << ch;
+        }
+    }
+    return false;
+}
+
+bool JsonBoolField(const std::string& json, const char* key, bool fallback) {
+    std::size_t pos = JsonFieldValuePos(json, key);
+    if (pos == std::string::npos) {
+        return fallback;
+    }
+    if (json.compare(pos, 4, "true") == 0) {
+        return true;
+    }
+    if (json.compare(pos, 5, "false") == 0) {
+        return false;
+    }
+    return fallback;
+}
+
+std::uint32_t JsonU32Field(const std::string& json, const char* key,
+        std::uint32_t fallback) {
+    std::size_t pos = JsonFieldValuePos(json, key);
+    if (pos == std::string::npos) {
+        return fallback;
+    }
+    char* end = nullptr;
+    unsigned long parsed = std::strtoul(json.c_str() + pos, &end, 10);
+    if (end == json.c_str() + pos || parsed > 0xfffffffful) {
+        return fallback;
+    }
+    return static_cast<std::uint32_t>(parsed);
+}
+
 double MsSince(std::chrono::steady_clock::time_point start) {
     using Duration = std::chrono::duration<double, std::milli>;
     return Duration(std::chrono::steady_clock::now() - start).count();
@@ -273,6 +374,23 @@ ArpsDeviceTimings ParseTimings(const std::string& json) {
     return timings;
 }
 
+ArpsPowerState ParsePowerState(const std::string& json) {
+    ArpsPowerState state;
+    JsonStringField(json, "request_id", &state.request_id);
+    state.ok = JsonBoolField(json, "ok", false);
+    JsonStringField(json, "error", &state.error);
+    JsonStringField(json, "reason", &state.reason);
+    state.display_id = JsonU32Field(json, "display_id", 0);
+    state.screen_on = JsonBoolField(json, "screen_on", false);
+    state.previous_screen_on = JsonBoolField(json, "previous_screen_on", false);
+    state.wake_lock_held_by_arps = JsonBoolField(json, "wake_lock_held_by_arps", false);
+    JsonStringField(json, "display_power_override", &state.display_power_override);
+    if (state.display_power_override.empty()) {
+        state.display_power_override = "unknown";
+    }
+    return state;
+}
+
 ArpsFrameMeta ParseFrameMeta(const RawPacket& packet) {
     const std::uint8_t* p = packet.base.data();
     ArpsFrameMeta meta;
@@ -312,6 +430,12 @@ ArpsReadResult StatusResult(ArpsReadStatus status, const RawPacket& packet) {
     result.packet_type = packet.type;
     result.sequence = packet.sequence;
     result.json = packet.ext;
+    return result;
+}
+
+ArpsReadResult PowerStateResult(const RawPacket& packet) {
+    ArpsReadResult result = StatusResult(ArpsReadStatus::PowerState, packet);
+    result.power_state = ParsePowerState(packet.ext);
     return result;
 }
 
@@ -423,6 +547,8 @@ public:
                 return StatusResult(ArpsReadStatus::Error, packet);
             case kPacketStop:
                 return StatusResult(ArpsReadStatus::Stop, packet);
+            case kPacketPowerState:
+                return PowerStateResult(packet);
             case kPacketFrame:
                 return DecodeFrame(packet, max_packet_len);
             default:
@@ -538,6 +664,42 @@ std::string ArpsStartOptions::ToJson() const {
     return out.str();
 }
 
+std::string ArpsPowerControlOptions::ToJson() const {
+    std::ostringstream out;
+    bool first = true;
+    out << "{";
+    if (display_id.has_value()) {
+        JsonFieldPrefix(out, &first, "display_id");
+        out << *display_id;
+    }
+    if (!request_id.empty()) {
+        JsonFieldPrefix(out, &first, "request_id");
+        out << JsonString(request_id);
+    }
+    if (!reason.empty()) {
+        JsonFieldPrefix(out, &first, "reason");
+        out << JsonString(reason);
+    }
+    if (keep_screen_on.has_value()) {
+        JsonFieldPrefix(out, &first, "keep_screen_on");
+        out << (*keep_screen_on ? "true" : "false");
+    }
+    if (power_on_if_screen_off.has_value()) {
+        JsonFieldPrefix(out, &first, "power_on_if_screen_off");
+        out << (*power_on_if_screen_off ? "true" : "false");
+    }
+    if (screen_interactive.has_value()) {
+        JsonFieldPrefix(out, &first, "screen_interactive");
+        out << JsonString(*screen_interactive);
+    }
+    if (display_power.has_value()) {
+        JsonFieldPrefix(out, &first, "display_power");
+        out << JsonString(*display_power);
+    }
+    out << "}";
+    return out.str();
+}
+
 ArpsReceiver::ArpsReceiver() : impl_(new Impl()) {}
 
 ArpsReceiver::~ArpsReceiver() {
@@ -615,16 +777,30 @@ bool ArpsReceiver::RequestFrame(std::string* error) {
     return SendControlPacket(kPacketFrameRequest, "{}", error);
 }
 
+bool ArpsReceiver::SendPowerControl(const ArpsPowerControlOptions& options,
+        std::string* error) {
+    return SendControlPacket(kPacketPowerControl, options.ToJson(), error);
+}
+
+bool ArpsReceiver::RequestPowerState(const std::string& request_id, std::string* error) {
+    if (request_id.empty()) {
+        if (error) {
+            *error = "request_id must not be empty";
+        }
+        return false;
+    }
+    ArpsPowerControlOptions options;
+    options.request_id = request_id;
+    return SendPowerControl(options, error);
+}
+
 bool ArpsReceiver::SendPowerControl(bool keep_screen_on, bool power_on_if_screen_off,
         const std::string& reason, std::string* error) {
-    std::ostringstream out;
-    out << "{"
-        << "\"keep_screen_on\":" << (keep_screen_on ? "true" : "false") << ","
-        << "\"power_on_if_screen_off\":"
-        << (power_on_if_screen_off ? "true" : "false") << ","
-        << "\"reason\":" << JsonString(reason)
-        << "}";
-    return SendControlPacket(kPacketPowerControl, out.str(), error);
+    ArpsPowerControlOptions options;
+    options.keep_screen_on = keep_screen_on;
+    options.power_on_if_screen_off = power_on_if_screen_off;
+    options.reason = reason;
+    return SendPowerControl(options, error);
 }
 
 bool ArpsReceiver::SendStop(const std::string& reason, std::string* error) {

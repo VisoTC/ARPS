@@ -739,6 +739,19 @@ int RunGui(arps::ArpsReceiver* receiver, bool pull_mode) {
             }
         } else if (result.status == arps::ArpsReadStatus::Timeout) {
             // Keep rendering the latest complete frame.
+        } else if (result.status == arps::ArpsReadStatus::PowerState) {
+            const arps::ArpsPowerState& power = result.power_state;
+            std::cout << "POWER_STATE request_id=" << power.request_id
+                      << " ok=" << (power.ok ? "true" : "false")
+                      << " screen_on=" << (power.screen_on ? "true" : "false")
+                      << " wake_lock_held_by_arps="
+                      << (power.wake_lock_held_by_arps ? "true" : "false")
+                      << " display_power_override=" << power.display_power_override;
+            if (!power.error.empty()) {
+                std::cout << " error=" << power.error;
+            }
+            std::cout << "\n";
+            stats.state = power.ok ? "POWER" : "PWR ERR";
         } else if (result.status == arps::ArpsReadStatus::Error) {
             std::cerr << "Device ERROR: " << result.json << "\n";
             stats.state = "ERROR";

@@ -210,34 +210,154 @@ final class ArpsClient {
     }
 
     private void applyPowerControl(ProtocolReader.Packet packet) {
+        String requestId = null;
+        String reason = "runtime_power_control";
+        int displayId = options.displayId;
+        boolean ok = true;
+        String error = "";
         try {
             JSONObject json = new JSONObject(new String(packet.ext, StandardCharsets.UTF_8));
-            if (!json.has("keep_screen_on")) {
-                Log.e("POWER_CONTROL missing keep_screen_on");
-                return;
-            }
+            requestId = optionalString(json, "request_id");
+            reason = json.optString("reason", reason);
 
-            boolean keepScreenOn = json.getBoolean("keep_screen_on");
-            boolean powerOnIfScreenOff = json.optBoolean("power_on_if_screen_off", false);
-            String reason = json.optString("reason", "runtime_power_control");
-
-            if (keepScreenOn) {
-                if (powerOnIfScreenOff && !powerController.isScreenOn(options.displayId)) {
-                    powerController.pressPower(options.displayId);
-                    SystemClock.sleep(500);
-                }
-                powerController.acquireWakeLock(options.displayId);
+            PowerControl control = parsePowerControl(json);
+            displayId = control.displayId;
+            String validationError = validatePowerControl(control);
+            if (validationError == null) {
+                applyPowerControl(control);
+                Log.i("POWER_CONTROL reason=" + reason + " display_id=" + displayId
+                        + " request_id=" + requestId + " ok");
             } else {
-                powerController.releaseWakeLock();
+                ok = false;
+                error = validationError;
+                Log.e("POWER_CONTROL rejected: " + validationError);
             }
-
-            options.keepScreenOn = keepScreenOn;
-            Log.i("POWER_CONTROL keep_screen_on=" + keepScreenOn
-                    + " power_on_if_screen_off=" + powerOnIfScreenOff
-                    + " reason=" + reason + " ok");
         } catch (Throwable e) {
+            ok = false;
+            error = String.valueOf(e.getMessage());
             Log.e("POWER_CONTROL failed", e);
         }
+
+        if (requestId != null) {
+            sendPowerStateQuietly(requestId, ok, error, reason, displayId);
+        }
+    }
+
+    private PowerControl parsePowerControl(JSONObject json) throws Exception {
+        PowerControl control = new PowerControl();
+        control.displayId = options.displayId;
+        if (json.has("display_id")) {
+            control.displayId = json.getInt("display_id");
+            if (control.displayId < 0) {
+                throw new IllegalArgumentException("display_id must be >= 0");
+            }
+        }
+        if (json.has("keep_screen_on")) {
+            control.hasKeepScreenOn = true;
+            control.keepScreenOn = json.getBoolean("keep_screen_on");
+        }
+        control.powerOnIfScreenOff = json.optBoolean("power_on_if_screen_off", false);
+        control.screenInteractive = optionalString(json, "screen_interactive");
+        if (control.screenInteractive != null
+                && !"on".equals(control.screenInteractive)
+                && !"off".equals(control.screenInteractive)) {
+            throw new IllegalArgumentException(
+                    "screen_interactive must be \"on\" or \"off\"");
+        }
+        control.displayPower = optionalString(json, "display_power");
+        if (control.displayPower != null
+                && !"on".equals(control.displayPower)
+                && !"off".equals(control.displayPower)) {
+            throw new IllegalArgumentException("display_power must be \"on\" or \"off\"");
+        }
+        return control;
+    }
+
+    private String validatePowerControl(PowerControl control) {
+        boolean finalWakeLockHeld = control.hasKeepScreenOn
+                ? control.keepScreenOn
+                : powerController.wakeLockHeld();
+        if ("off".equals(control.screenInteractive) && finalWakeLockHeld) {
+            return "screen_interactive=off conflicts with ARPS wake lock";
+        }
+        return null;
+    }
+
+    private void applyPowerControl(PowerControl control) throws Exception {
+        if (control.hasKeepScreenOn && !control.keepScreenOn) {
+            powerController.releaseWakeLock();
+            options.keepScreenOn = false;
+        }
+        if (control.powerOnIfScreenOff && !powerController.isScreenOn(control.displayId)) {
+            powerController.pressPower(control.displayId);
+            SystemClock.sleep(500);
+        }
+        if ("on".equals(control.displayPower)
+                && !powerController.setDisplayPower(control.displayId, true)) {
+            throw new IOException("setDisplayPower(on) failed");
+        }
+        if ("on".equals(control.screenInteractive)
+                && !powerController.isScreenOn(control.displayId)) {
+            powerController.pressPower(control.displayId);
+            SystemClock.sleep(500);
+        }
+        if ("off".equals(control.screenInteractive)
+                && powerController.isScreenOn(control.displayId)) {
+            powerController.pressPower(control.displayId);
+            SystemClock.sleep(300);
+        }
+        if ("off".equals(control.displayPower)
+                && !powerController.setDisplayPower(control.displayId, false)) {
+            throw new IOException("setDisplayPower(off) failed");
+        }
+        if (control.hasKeepScreenOn && control.keepScreenOn) {
+            if (!powerController.isScreenOn(control.displayId)) {
+                powerController.pressPower(control.displayId);
+                SystemClock.sleep(500);
+            }
+            powerController.acquireWakeLock(control.displayId);
+            options.keepScreenOn = true;
+        }
+    }
+
+    private void sendPowerStateQuietly(String requestId, boolean ok, String error,
+            String reason, int displayId) {
+        ProtocolWriter w = writer;
+        if (w == null) {
+            return;
+        }
+        try {
+            PowerController.StateSnapshot snapshot = powerController.snapshot(displayId);
+            JSONObject json = new JSONObject();
+            json.put("request_id", requestId);
+            json.put("ok", ok);
+            json.put("error", ok ? "" : error);
+            json.put("reason", reason);
+            json.put("display_id", displayId);
+            json.put("screen_on", snapshot.screenOn);
+            json.put("previous_screen_on", previousScreenOn);
+            json.put("wake_lock_held_by_arps", snapshot.wakeLockHeld);
+            json.put("display_power_override", snapshot.displayPowerOverride);
+            w.writeJson(Protocol.TYPE_POWER_STATE, json);
+        } catch (Throwable e) {
+            Log.e("POWER_STATE failed", e);
+        }
+    }
+
+    private static String optionalString(JSONObject json, String key) throws Exception {
+        if (!json.has(key) || json.isNull(key)) {
+            return null;
+        }
+        return json.getString(key);
+    }
+
+    private static final class PowerControl {
+        int displayId;
+        boolean hasKeepScreenOn;
+        boolean keepScreenOn;
+        boolean powerOnIfScreenOff;
+        String screenInteractive;
+        String displayPower;
     }
 
     private void writeNextFrame(ScreenCapturer capturer, StreamState state) throws Exception {
@@ -299,7 +419,12 @@ final class ArpsClient {
         capabilities.put("native_lz4", true);
         capabilities.put("stream_modes", new JSONArray().put("push").put("pull"));
         capabilities.put("runtime_power_control",
-                new JSONArray().put("keep_screen_on").put("power_on_if_screen_off"));
+                new JSONArray().put("keep_screen_on")
+                        .put("power_on_if_screen_off")
+                        .put("request_id")
+                        .put("power_state")
+                        .put("screen_interactive")
+                        .put("display_power"));
         root.put("capabilities", capabilities);
         return root;
     }

@@ -22,6 +22,7 @@ enum PacketType : std::uint16_t {
     kPacketError = 6,
     kPacketStop = 7,
     kPacketPowerControl = 8,
+    kPacketPowerState = 9,
 };
 
 enum PixelFormat : std::uint32_t {

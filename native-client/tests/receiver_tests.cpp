@@ -157,6 +157,26 @@ void WithReadFromBytes(const std::vector<std::uint8_t>& bytes, Fn fn) {
     fn(result);
 }
 
+std::string ReadSentExt(arps::ArpsSocket socket, std::uint16_t expected_type) {
+    std::uint8_t header[arps::kHeaderLen];
+    RecvAll(socket, header, sizeof(header));
+    CHECK(std::memcmp(header, arps::kMagic, arps::kMagicSize) == 0);
+    CHECK(header[14] == 0);
+    CHECK(header[15] == arps::kProtocolMinor);
+    CHECK(header[16] == 0);
+    CHECK(header[17] == expected_type);
+    std::uint32_t packet_len = ReadBe32(header + 28);
+    std::vector<std::uint8_t> packet(packet_len);
+    RecvAll(socket, packet.data(), packet.size());
+    std::uint32_t base_len = ReadBe32(packet.data());
+    std::uint32_t bitmap_len = ReadBe32(packet.data() + 4 + base_len);
+    std::uint32_t ext_len = ReadBe32(packet.data() + 4 + base_len + 4 + bitmap_len);
+    const std::uint8_t* ext_data = packet.data() + 4 + base_len + 4 + bitmap_len + 4;
+    CHECK(base_len == 0);
+    CHECK(bitmap_len == 0);
+    return std::string(reinterpret_cast<const char*>(ext_data), ext_len);
+}
+
 void TestHello() {
     WithReadFromBytes(Packet(arps::kPacketHello, {}, {}, "{\"ok\":true}"),
             [](const arps::ArpsReadResult& result) {
@@ -183,6 +203,25 @@ void TestControlStatuses() {
             [](const arps::ArpsReadResult& result) {
                 CHECK(result.status == arps::ArpsReadStatus::Stop);
                 CHECK(result.json == "{\"reason\":\"done\"}");
+            });
+}
+
+void TestPowerState() {
+    WithReadFromBytes(Packet(arps::kPacketPowerState, {}, {},
+            "{\"request_id\":\"q1\",\"ok\":true,\"error\":\"\","
+            "\"reason\":\"query\",\"display_id\":2,\"screen_on\":true,"
+            "\"previous_screen_on\":false,\"wake_lock_held_by_arps\":false,"
+            "\"display_power_override\":\"unknown\"}"),
+            [](const arps::ArpsReadResult& result) {
+                CHECK(result.status == arps::ArpsReadStatus::PowerState);
+                CHECK(result.power_state.request_id == "q1");
+                CHECK(result.power_state.ok);
+                CHECK(result.power_state.reason == "query");
+                CHECK(result.power_state.display_id == 2);
+                CHECK(result.power_state.screen_on);
+                CHECK(!result.power_state.previous_screen_on);
+                CHECK(!result.power_state.wake_lock_held_by_arps);
+                CHECK(result.power_state.display_power_override == "unknown");
             });
 }
 
@@ -369,6 +408,41 @@ void TestSendPowerControl() {
     compat::Close(sockets[1]);
 }
 
+void TestSendPowerControlOptions() {
+    arps::ArpsSocket sockets[2];
+    std::string error;
+    CHECK(compat::CreateConnectedSocketPair(sockets, &error));
+    arps::ArpsReceiver receiver;
+    CHECK(receiver.AdoptConnectedSocket(sockets[0], &error));
+    arps::ArpsPowerControlOptions options;
+    options.request_id = "task-end-1";
+    options.reason = "task_end";
+    options.keep_screen_on = false;
+    options.display_power = "off";
+    CHECK(receiver.SendPowerControl(options, &error));
+    std::string ext = ReadSentExt(sockets[1], arps::kPacketPowerControl);
+    CHECK(ext.find("\"request_id\":\"task-end-1\"") != std::string::npos);
+    CHECK(ext.find("\"reason\":\"task_end\"") != std::string::npos);
+    CHECK(ext.find("\"keep_screen_on\":false") != std::string::npos);
+    CHECK(ext.find("\"display_power\":\"off\"") != std::string::npos);
+    CHECK(ext.find("power_on_if_screen_off") == std::string::npos);
+    CHECK(ext.find("screen_interactive") == std::string::npos);
+    CHECK(ext.find("display_id") == std::string::npos);
+    compat::Close(sockets[1]);
+}
+
+void TestRequestPowerState() {
+    arps::ArpsSocket sockets[2];
+    std::string error;
+    CHECK(compat::CreateConnectedSocketPair(sockets, &error));
+    arps::ArpsReceiver receiver;
+    CHECK(receiver.AdoptConnectedSocket(sockets[0], &error));
+    CHECK(receiver.RequestPowerState("query-1", &error));
+    std::string ext = ReadSentExt(sockets[1], arps::kPacketPowerControl);
+    CHECK(ext == "{\"request_id\":\"query-1\"}");
+    compat::Close(sockets[1]);
+}
+
 void TestSendStop() {
     arps::ArpsSocket sockets[2];
     std::string error;
@@ -403,12 +477,15 @@ int main() {
     TestHello();
     TestReady();
     TestControlStatuses();
+    TestPowerState();
     TestRawFrame();
     TestLz4Frame();
     TestProtocolErrors();
     TestSendStart();
     TestRequestFrame();
     TestSendPowerControl();
+    TestSendPowerControlOptions();
+    TestRequestPowerState();
     TestSendStop();
     std::cout << "receiver_tests: ok\n";
     return 0;

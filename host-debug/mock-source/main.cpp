@@ -336,8 +336,27 @@ std::vector<std::uint8_t> BuildHello(std::uint32_t sequence) {
             "\"capabilities\":{\"pixel_formats\":[\"argb8888\"],"
             "\"compressions\":[\"raw\",\"lz4_block\"],\"screen_power\":false,"
             "\"max_packet_len\":67108864,\"native_lz4\":true,"
-            "\"stream_modes\":[\"push\",\"pull\"]}}";
+            "\"stream_modes\":[\"push\",\"pull\"],"
+            "\"runtime_power_control\":[\"keep_screen_on\","
+            "\"power_on_if_screen_off\",\"request_id\",\"power_state\","
+            "\"screen_interactive\",\"display_power\"]}}";
     return BuildPacket(arps::kPacketHello, {}, {}, ext, sequence);
+}
+
+std::string PowerStateExt(const std::string& control_ext) {
+    std::string request_id = JsonString(control_ext, "request_id", "");
+    std::string reason = JsonString(control_ext, "reason", "runtime_power_control");
+    std::ostringstream out;
+    out << "{\"request_id\":\"" << request_id << "\","
+        << "\"ok\":true,"
+        << "\"error\":\"\","
+        << "\"reason\":\"" << reason << "\","
+        << "\"display_id\":0,"
+        << "\"screen_on\":true,"
+        << "\"previous_screen_on\":true,"
+        << "\"wake_lock_held_by_arps\":false,"
+        << "\"display_power_override\":\"unknown\"}";
+    return out.str();
 }
 
 void GenerateFrame(std::uint32_t width, std::uint32_t height, std::uint64_t frame_no,
@@ -512,6 +531,18 @@ int main(int argc, char** argv) {
             }
             if (request.type == arps::kPacketStop) {
                 break;
+            }
+            if (request.type == arps::kPacketPowerControl) {
+                if (!JsonString(request.ext, "request_id", "").empty()) {
+                    std::string state = PowerStateExt(request.ext);
+                    if (!SendAll(socket, BuildPacket(arps::kPacketPowerState, {}, {}, state,
+                                sequence++), &error)) {
+                        std::cerr << "Send POWER_STATE failed: " << error << "\n";
+                        sockets::Close(socket);
+                        return 1;
+                    }
+                }
+                continue;
             }
             if (request.type != arps::kPacketFrameRequest) {
                 std::cerr << "Expected FRAME_REQUEST, got type=" << request.type << "\n";

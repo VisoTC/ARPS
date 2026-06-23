@@ -20,6 +20,7 @@ final class PowerController {
     private Method acquireWakeLockMethod;
     private Method releaseWakeLockMethod;
     private boolean wakeLockHeld;
+    private String displayPowerOverride = "unknown";
 
     PowerController() {
         powerManager = SystemServices.getInterface("power", "android.os.IPowerManager");
@@ -47,8 +48,12 @@ final class PowerController {
         return ok;
     }
 
-    boolean setDisplayPower(int displayId, boolean on) {
-        return SurfaceControlBridge.setDisplayPower(displayId, on);
+    synchronized boolean setDisplayPower(int displayId, boolean on) {
+        boolean ok = SurfaceControlBridge.setDisplayPower(displayId, on);
+        if (ok) {
+            displayPowerOverride = on ? "on" : "off";
+        }
+        return ok;
     }
 
     synchronized void acquireWakeLock(int displayId) throws Exception {
@@ -74,6 +79,17 @@ final class PowerController {
             Log.e("releaseWakeLock failed", e);
         } finally {
             wakeLockHeld = false;
+        }
+    }
+
+    synchronized boolean wakeLockHeld() {
+        return wakeLockHeld;
+    }
+
+    StateSnapshot snapshot(int displayId) {
+        boolean screenOn = isScreenOn(displayId);
+        synchronized (this) {
+            return new StateSnapshot(screenOn, wakeLockHeld, displayPowerOverride);
         }
     }
 
@@ -230,5 +246,17 @@ final class PowerController {
             }
         }
         return false;
+    }
+
+    static final class StateSnapshot {
+        final boolean screenOn;
+        final boolean wakeLockHeld;
+        final String displayPowerOverride;
+
+        StateSnapshot(boolean screenOn, boolean wakeLockHeld, String displayPowerOverride) {
+            this.screenOn = screenOn;
+            this.wakeLockHeld = wakeLockHeld;
+            this.displayPowerOverride = displayPowerOverride;
+        }
     }
 }

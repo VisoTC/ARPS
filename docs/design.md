@@ -20,7 +20,7 @@ shell 环境运行，不安装为普通应用；它采集主显示屏的 `ARGB_8
 - 设备端通过 `app_process` 启动，不安装 apk，不保留 Activity/UI。
 - 主机端以 C++ `native-client` 作为最终集成边界。
 - 通过明确协议承载帧数据、控制消息、错误消息和未来扩展字段。
-- 支持启动时点亮屏幕、可选关闭物理屏幕输出、退出时恢复或设置屏幕状态。
+- 支持启动时点亮屏幕、运行期控制/查询电源状态、可选关闭物理屏幕输出、退出时恢复或设置屏幕状态。
 
 ## 非目标
 
@@ -102,7 +102,7 @@ Wrapper 不是构建产物。它固定构建入口和 Gradle 版本，使 Orb De
 - 发送 `START` 配置。
 - 等待设备端 `READY`。
 - 在 pull 模式下发送 `FRAME_REQUEST`。
-- 在复用连接时发送运行期 `POWER_CONTROL`。
+- 在复用连接时发送运行期 `POWER_CONTROL` 并读取 `POWER_STATE`。
 - 读取 ARPS packet。
 - 校验协议字段。
 - 解压 `raw` 或 `lz4_block` payload。
@@ -127,6 +127,7 @@ device -> READY
 push: device -> FRAME...
 pull: host -> FRAME_REQUEST, device -> FRAME
 host   -> POWER_CONTROL
+device -> POWER_STATE
 host closes socket or device sends STOP/ERROR
 ```
 
@@ -134,7 +135,8 @@ TCP 提供有序可靠字节流。push 模式采取串行 `capture -> compress -
 写阻塞时设备端不会继续无限制捕获新帧，从而避免内存队列堆积。`max_fps > 0` 只在
 push 模式下节流，`max_fps = 0` 表示不 sleep、尽快连续推帧。pull 模式由主机显式
 发送 `FRAME_REQUEST`，设备端每收到一次请求只采集、压缩并发送一帧。主机复用同一
-连接执行多轮任务时，可以在任务开始和结束发送 `POWER_CONTROL` 调整 wake lock。
+连接执行多轮任务时，可以在任务开始和结束发送 `POWER_CONTROL` 调整 wake lock，并通过
+`POWER_STATE` 查询/确认设备端当前电源状态。
 
 ## 屏幕电源策略
 
@@ -152,12 +154,13 @@ push 模式下节流，`max_fps = 0` 表示不 sleep、尽快连续推帧。pull
 `START.power_on_if_screen_off` 负责新连接或重新 init ARPS 时的按需点亮。复用已有
 ARPS 连接时，上一轮任务结束释放 wake lock 后，空闲期间屏幕可能再次熄灭；下一轮任
 务开始应通过 `POWER_CONTROL.power_on_if_screen_off=true` 重新按需点亮并申请 wake
-lock。
+lock；任务结束应通过 `POWER_CONTROL.keep_screen_on=false` 释放 ARPS wake lock，而不是
+停止连接。
 
 `keep_screen_on` 不修改系统 `screen_off_timeout`，也不做轮询守护；它只覆盖 ARPS 推
 流期间的系统自动熄屏，不承诺覆盖用户手动按 POWER 或厂商强制省电策略。启动阶段
-WakeLock 获取失败时设备端发送 `ERROR` 并退出；运行期 `POWER_CONTROL` 失败只记录日
-志，不关闭截图通道。
+WakeLock 获取失败时设备端发送 `ERROR` 并退出；运行期 `POWER_CONTROL` 失败会记录日
+志，并在带 `request_id` 的请求中通过 `POWER_STATE.ok=false` 返回，不关闭截图通道。
 
 ## 像素与压缩约定
 
@@ -248,13 +251,15 @@ offset  size  field
 6 = ERROR
 7 = STOP
 8 = POWER_CONTROL
+9 = POWER_STATE
 ```
 
 未知 `packet_type` 应作为协议错误处理。
 
 ### Control Packets
 
-`HELLO`、`START`、`READY`、`FRAME_REQUEST`、`ERROR`、`STOP`、`POWER_CONTROL`
+`HELLO`、`START`、`READY`、`FRAME_REQUEST`、`ERROR`、`STOP`、`POWER_CONTROL`、
+`POWER_STATE`
 都使用同一包结构：
 
 ```text
@@ -282,7 +287,14 @@ ExtData    = UTF-8 JSON
     "max_packet_len": 67108864,
     "native_lz4": true,
     "stream_modes": ["push", "pull"],
-    "runtime_power_control": ["keep_screen_on", "power_on_if_screen_off"]
+    "runtime_power_control": [
+      "keep_screen_on",
+      "power_on_if_screen_off",
+      "request_id",
+      "power_state",
+      "screen_interactive",
+      "display_power"
+    ]
   }
 }
 ```
@@ -334,14 +346,25 @@ push 帧或发送 pull 请求。
 }
 ```
 
-`POWER_CONTROL` 由主机端在连接建立后的运行期发送，用于复用同一 ARPS 连接时控制
-wake lock 和按需点亮屏幕。它不需要 ACK；解析或电源操作失败时设备端只记录日志，不
-发送 `ERROR`，也不关闭连接。
+`POWER_CONTROL` 由主机端在连接建立后的运行期发送，用于复用同一 ARPS 连接时控制或
+查询电源状态。它使用 patch 语义：缺省字段表示不改变对应状态；带 `request_id` 时设备
+端必须返回 `POWER_STATE`；没有 `request_id` 的旧式调用仍是 fire-and-forget。
+
+字段：
+
+- `request_id`：可选字符串，用于关联 `POWER_STATE`；只带该字段时是纯查询。
+- `display_id`：可选整数，缺省使用当前会话 display id。
+- `reason`：可选字符串，默认 `runtime_power_control`。
+- `keep_screen_on`：可选 bool，控制 ARPS 自己持有的 wake lock。
+- `power_on_if_screen_off`：可选 bool，一次性动作；为 true 且当前熄屏时注入 POWER 键点亮。
+- `screen_interactive`：可选 `"on"` 或 `"off"`，通过 POWER 键按需改变系统交互状态。
+- `display_power`：可选 `"on"` 或 `"off"`，通过 `SurfaceControl.setDisplayPowerMode` 改变显示输出。
 
 任务开始时：
 
 ```json
 {
+  "request_id": "task-start-1",
   "keep_screen_on": true,
   "power_on_if_screen_off": true,
   "reason": "task_start"
@@ -355,6 +378,7 @@ wake lock 和按需点亮屏幕。它不需要 ACK；解析或电源操作失败
 
 ```json
 {
+  "request_id": "task-end-1",
   "keep_screen_on": false,
   "reason": "task_end"
 }
@@ -362,6 +386,38 @@ wake lock 和按需点亮屏幕。它不需要 ACK；解析或电源操作失败
 
 语义为：只释放 wake lock，不执行 `exit_power_mode`，不发送 `STOP`，不关闭 socket，
 不清理 adb reverse。
+
+纯查询时：
+
+```json
+{
+  "request_id": "power-query-1"
+}
+```
+
+设备端不改变任何状态，只返回 `POWER_STATE`。如果 `screen_interactive="off"` 与最终仍
+持有 ARPS wake lock 冲突，设备端返回 `ok=false`，不关闭截图通道。
+
+`POWER_STATE` 由设备端发送，表示当前 ARPS 观察/跟踪到的电源状态。push 模式下它可以
+和 `FRAME` 在同一 TCP 连接上交错出现，主机端必须按 `packet_type` 分发，并用
+`request_id` 匹配查询结果。
+
+```json
+{
+  "request_id": "power-query-1",
+  "ok": true,
+  "error": "",
+  "reason": "runtime_power_control",
+  "display_id": 0,
+  "screen_on": true,
+  "previous_screen_on": true,
+  "wake_lock_held_by_arps": false,
+  "display_power_override": "unknown"
+}
+```
+
+`display_power_override` 只表示 ARPS 最近一次成功设置的显示输出状态，取值为
+`"on"`、`"off"` 或 `"unknown"`；它不是 Android 系统提供的真实 display power getter。
 
 `ERROR` 由设备端发送，表示设备端异常。主机端应记录并结束当前会话。
 
@@ -468,9 +524,10 @@ offset  size  field
 - `lz4_block` 解压成功，且输出长度等于 `uncompressed_len`。
 
 设备端发往主机的控制包应作为状态返回给调用方，而不是静默丢弃。当前 C++ 接口使用
-`ArpsReadStatus` 区分 `Frame`、`Hello`、`Ready`、`Error`、`Stop`、`Timeout`、
-`Closed` 和 `ProtocolError`。`POWER_CONTROL` 是 host -> device 包，native-client
-通过发送 API 暴露，不作为 `ReadNext()` 状态返回。
+`ArpsReadStatus` 区分 `Frame`、`Hello`、`Ready`、`PowerState`、`Error`、`Stop`、
+`Timeout`、`Closed` 和 `ProtocolError`。`POWER_CONTROL` 是 host -> device 包，
+native-client 通过发送 API 暴露，不作为 `ReadNext()` 状态返回；`POWER_STATE` 是
+device -> host 包，会作为 `ArpsReadStatus::PowerState` 返回。
 
 ## 兼容性规则
 

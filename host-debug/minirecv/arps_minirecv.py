@@ -21,6 +21,7 @@ TYPE_FRAME = 5
 TYPE_ERROR = 6
 TYPE_STOP = 7
 TYPE_POWER_CONTROL = 8
+TYPE_POWER_STATE = 9
 
 
 def read_exact(sock, length):
@@ -174,11 +175,17 @@ def main():
             print("READY", ready["ext"].decode("utf-8", "replace"))
 
             last_payload = None
-            for _ in range(args.frames):
+            frames_read = 0
+            while frames_read < args.frames:
                 if args.stream_mode == "pull":
                     write_packet(conn, TYPE_FRAME_REQUEST, ext=b"{}", sequence=sequence)
                     sequence += 1
-                packet = read_packet(conn, max_packet_len)
+                while True:
+                    packet = read_packet(conn, max_packet_len)
+                    if packet["type"] == TYPE_POWER_STATE:
+                        print("POWER_STATE", packet["ext"].decode("utf-8", "replace"))
+                        continue
+                    break
                 if packet["type"] == TYPE_ERROR:
                     print("ERROR", packet["ext"].decode("utf-8", "replace"))
                     break
@@ -195,6 +202,7 @@ def main():
                 if packet["ext"]:
                     print("EXT", packet["ext"].decode("utf-8", "replace"))
                 last_payload = packet["bitmap"]
+                frames_read += 1
 
             if args.save_payload and last_payload is not None:
                 Path(args.save_payload).write_bytes(last_payload)

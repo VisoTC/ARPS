@@ -16,6 +16,7 @@ final class Protocol {
     static final int TYPE_ERROR = 6;
     static final int TYPE_STOP = 7;
     static final int TYPE_POWER_CONTROL = 8;
+    static final int TYPE_POWER_STATE = 9;
 
     static final int PIXEL_FORMAT_ANDROID_ARGB_8888_RAW = 1;
 
