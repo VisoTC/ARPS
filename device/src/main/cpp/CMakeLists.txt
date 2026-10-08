@@ -12,6 +12,12 @@ target_include_directories(lz4arps PRIVATE
 target_compile_definitions(lz4arps PRIVATE
         LZ4_HEAPMODE=1)
 
+# 去掉调试信息中的本机绝对路径，使 build-id 与构建目录、NDK 安装位置无关，保证可复现构建。
+get_filename_component(ARPS_ROOT_DIR ${CMAKE_CURRENT_LIST_DIR}/../../../.. ABSOLUTE)
+target_compile_options(lz4arps PRIVATE
+        -ffile-prefix-map=${ARPS_ROOT_DIR}=.
+        -ffile-prefix-map=${ANDROID_NDK}=/android-ndk)
+
 target_link_libraries(lz4arps PRIVATE
         android)
 

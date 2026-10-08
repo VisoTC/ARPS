@@ -1,0 +1,108 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  JAVA_VERSION: '17'
+  NDK_VERSION: '27.2.12479018'
+  CMAKE_VERSION: '3.22.1'
+  APK_NAME: arps-device.apk
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    outputs:
+      sha256: ${{ steps.digest.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+        with:
+          log-accepted-android-sdk-licenses: false
+          packages: 'ndk;${{ env.NDK_VERSION }} cmake;${{ env.CMAKE_VERSION }}'
+
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
+      - name: Check tag matches versionName
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          version_name="$(sed -n "s/^[[:space:]]*versionName '\(.*\)'/\1/p" device/build.gradle)"
+          if [ "v${version_name}" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match versionName ${version_name}"
+            exit 1
+          fi
+
+      - name: Build release apk
+        run: ./gradlew --no-daemon :device:assembleRelease
+
+      - name: Compute sha256
+        id: digest
+        working-directory: device/build/outputs/apk/release
+        run: |
+          sha256sum "${APK_NAME}" | tee "${APK_NAME}.sha256"
+          echo "sha256=$(cut -d ' ' -f 1 "${APK_NAME}.sha256")" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: arps-device
+          path: |
+            device/build/outputs/apk/release/${{ env.APK_NAME }}
+            device/build/outputs/apk/release/${{ env.APK_NAME }}.sha256
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: arps-device
+
+      - name: Verify artifact digest
+        run: echo "${{ needs.build.outputs.sha256 }}  ${APK_NAME}" | sha256sum -c -
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ env.APK_NAME }}
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA256: ${{ needs.build.outputs.sha256 }}
+        run: |
+          cat > notes.md <<EOF
+          Commit: ${GITHUB_SHA}
+          Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+
+          \`${APK_NAME}\` sha256: \`${SHA256}\`
+
+          验证来源：\`gh attestation verify ${APK_NAME} -R ${GITHUB_REPOSITORY}\`
+          EOF
+          gh release create "${GITHUB_REF_NAME}" \
+            -R "${GITHUB_REPOSITORY}" \
+            --title "${GITHUB_REF_NAME}" \
+            --notes-file notes.md \
+            --verify-tag \
+            "${APK_NAME}" "${APK_NAME}.sha256"

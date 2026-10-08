@@ -74,6 +74,34 @@ host closes socket or device sends STOP/ERROR
 设备端启动时通过 `CLASSPATH` 定位自身 apk，从 zip 中解出当前 ABI 的 native 库到
 `/data/local/tmp` 下的唯一临时文件，`System.load` 后尽量删除临时文件。
 
+### 正式发布
+
+正式发布只由 GitHub Actions（`.github/workflows/release.yml`）构建：推送 `v<versionName>`
+格式的 tag 后，CI 执行 `:device:assembleRelease`，并把 `arps-device.apk` 及其 `.sha256`
+上传到对应的 GitHub Release，同时生成 SLSA 构建来源证明。tag 必须与
+`device/build.gradle` 中的 `versionName` 一致。
+
+```bash
+git tag v0.1.0 && git push github v0.1.0
+```
+
+release apk 不签名：它只作为 `app_process` 的 `CLASSPATH` 使用，不安装，也不会经过包管理器的签名校验。
+
+下游可以用以下任一方式校验产物：
+
+```bash
+# 校验 apk 确实由本仓库该 tag 的 CI 构建
+gh attestation verify arps-device.apk -R VisoTC/ARPS
+
+# 或者自行复现构建后比对 sha256
+./gradlew :device:assembleRelease
+sha256sum device/build/outputs/apk/release/arps-device.apk
+```
+
+构建是可复现的：native 库编译时用 `-ffile-prefix-map` 去掉了源码目录和 NDK 安装路径，
+所以同一 commit 在不同目录下构建会得到相同的 apk。复现时需要与 CI 使用相同版本的
+JDK（17）、NDK（27.2.12479018）和 CMake（3.22.1），JDK 版本不同可能导致 dex 产生差异。
+
 ### 主机调试工具（host-debug）
 
 可视化调试主机 `arps-host-debug` 链接同一套 `native-client` 接收实现，依赖 `clang++`、
