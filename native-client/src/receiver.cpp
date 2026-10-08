@@ -763,6 +763,10 @@ bool ArpsReceiver::Listen(const std::string& host, std::uint16_t port, std::stri
         sockets::Close(socket);
         return false;
     }
+    if (!sockets::LocalPort(socket, &listen_port_, error)) {
+        sockets::Close(socket);
+        return false;
+    }
     listen_socket_ = socket;
     return true;
 }
@@ -938,6 +942,7 @@ void ArpsReceiver::Close()
     if (!sockets::IsInvalid(listen_socket_)) {
         sockets::Close(listen_socket_);
         listen_socket_ = kInvalidArpsSocket;
+        listen_port_ = 0;
     }
 }
 

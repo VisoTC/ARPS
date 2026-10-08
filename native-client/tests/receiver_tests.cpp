@@ -434,6 +434,20 @@ arps::ArpsReadResult ReadHelloWithToken(const std::string& hello_json, const std
     return receiver.ReadNext(1000);
 }
 
+void TestListenEphemeralPort()
+{
+    arps::ArpsReceiver receiver;
+    std::string error;
+    CHECK(receiver.Listen("127.0.0.1", 0, &error));
+    CHECK(receiver.listen_port() != 0);
+    arps::ArpsSocket client = compat::ConnectIpv4("127.0.0.1", receiver.listen_port(), &error);
+    CHECK(!compat::IsInvalid(client));
+    CHECK(receiver.AcceptOnce(1000, &error));
+    compat::Close(client);
+    receiver.Close();
+    CHECK(receiver.listen_port() == 0);
+}
+
 void TestSessionToken()
 {
     CHECK(ReadHelloWithToken("{\"session_token\":\"abc\"}", "abc").status == arps::ArpsReadStatus::Hello);
@@ -560,6 +574,7 @@ int main()
     TestRequestFrame();
     TestRequestFrameWithId();
     TestSessionToken();
+    TestListenEphemeralPort();
     TestSendPowerControl();
     TestSendPowerControlOptions();
     TestRequestPowerState();

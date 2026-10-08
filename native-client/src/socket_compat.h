@@ -27,6 +27,7 @@ void SetTcpNoDelay(ArpsSocket socket);
 void SetNoSigpipe(ArpsSocket socket);
 bool BindIpv4(ArpsSocket socket, const std::string& host, std::uint16_t port, std::string* error);
 bool StartListening(ArpsSocket socket, int backlog, std::string* error);
+bool LocalPort(ArpsSocket socket, std::uint16_t* port, std::string* error);
 ArpsSocket Accept(ArpsSocket socket, std::string* error);
 ArpsSocket ConnectIpv4(const std::string& host, std::uint16_t port, std::string* error);
 WaitStatus WaitReadable(ArpsSocket socket, int timeout_ms, const char* operation, std::string* error);

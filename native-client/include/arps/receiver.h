@@ -90,6 +90,7 @@ public:
     ArpsReceiver(const ArpsReceiver&) = delete;
     ArpsReceiver& operator=(const ArpsReceiver&) = delete;
 
+    // port 传 0 时由系统分配空闲端口，用 listen_port() 读取实际端口。
     bool Listen(const std::string& host, std::uint16_t port, std::string* error);
     bool AcceptOnce(int timeout_ms, std::string* error);
     bool AdoptConnectedSocket(ArpsSocket socket, std::string* error);
@@ -109,6 +110,8 @@ public:
     ArpsReadResult ReadNext(int timeout_ms);
     void Close();
 
+    std::uint16_t listen_port() const { return listen_port_; }
+
     ArpsSocket client_socket() const { return client_socket_; }
 
     ArpsSocket client_fd() const { return client_socket_; }
@@ -116,6 +119,7 @@ public:
 private:
     ArpsSocket listen_socket_ = kInvalidArpsSocket;
     ArpsSocket client_socket_ = kInvalidArpsSocket;
+    std::uint16_t listen_port_ = 0;
     std::uint32_t max_packet_len_ = kDefaultMaxPacketLen;
     std::uint32_t next_sequence_ = 1;
     std::string expected_session_token_;

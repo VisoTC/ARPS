@@ -241,6 +241,24 @@ bool StartListening(ArpsSocket socket, int backlog, std::string* error)
     return true;
 }
 
+bool LocalPort(ArpsSocket socket, std::uint16_t* port, std::string* error)
+{
+    sockaddr_in bound {};
+#ifdef _WIN32
+    int bound_len = static_cast<int>(sizeof(bound));
+#else
+    socklen_t bound_len = sizeof(bound);
+#endif
+    if (getsockname(ToNative(socket), reinterpret_cast<sockaddr*>(&bound), &bound_len) != 0) {
+        if (error) {
+            *error = LastSocketErrorMessage("getsockname");
+        }
+        return false;
+    }
+    *port = ntohs(bound.sin_port);
+    return true;
+}
+
 ArpsSocket Accept(ArpsSocket socket, std::string* error)
 {
 #ifdef _WIN32
