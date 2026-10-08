@@ -11,8 +11,8 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-#include <winsock2.h>
 #include <windows.h>
+#include <winsock2.h>
 #include <ws2tcpip.h>
 
 #include <mutex>
@@ -27,40 +27,48 @@
 #include <unistd.h>
 #endif
 
-namespace arps {
-namespace socket_compat {
-namespace {
+namespace arps
+{
+namespace socket_compat
+{
+namespace detail
+{
 
 constexpr int kMaxIoChunk = std::numeric_limits<int>::max();
 
 #ifdef _WIN32
 
-SOCKET ToNative(ArpsSocket socket) {
+SOCKET ToNative(ArpsSocket socket)
+{
     return static_cast<SOCKET>(socket);
 }
 
-ArpsSocket FromNative(SOCKET socket) {
+ArpsSocket FromNative(SOCKET socket)
+{
     return static_cast<ArpsSocket>(socket);
 }
 
-std::string LastSocketErrorMessage(const char* prefix) {
+std::string LastSocketErrorMessage(const char* prefix)
+{
     int code = WSAGetLastError();
     char* buffer = nullptr;
-    DWORD len = FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER
-                    | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-            nullptr, static_cast<DWORD>(code),
-            MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), reinterpret_cast<char*>(&buffer), 0,
-            nullptr);
+    DWORD len = FormatMessageA(
+        FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+        nullptr,
+        static_cast<DWORD>(code),
+        MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+        reinterpret_cast<char*>(&buffer),
+        0,
+        nullptr);
     std::string message;
     if (len > 0 && buffer != nullptr) {
         message.assign(buffer, len);
-        while (!message.empty()
-                && (message.back() == '\r' || message.back() == '\n'
-                        || message.back() == ' ')) {
+        while (!message.empty() && (message.back() == '\r' || message.back() == '\n' || message.back() == ' ')) {
             message.pop_back();
         }
         LocalFree(buffer);
-    } else {
+    }
+    else {
         message = "Winsock error " + std::to_string(code);
     }
 
@@ -69,63 +77,72 @@ std::string LastSocketErrorMessage(const char* prefix) {
     return out.str();
 }
 
-bool IsInterruptedSocketError() {
+bool IsInterruptedSocketError()
+{
     return WSAGetLastError() == WSAEINTR;
 }
 
 #else
 
-int ToNative(ArpsSocket socket) {
+int ToNative(ArpsSocket socket)
+{
     return socket;
 }
 
-ArpsSocket FromNative(int socket) {
+ArpsSocket FromNative(int socket)
+{
     return socket;
 }
 
-std::string LastSocketErrorMessage(const char* prefix) {
+std::string LastSocketErrorMessage(const char* prefix)
+{
     std::ostringstream out;
     out << prefix << ": " << std::strerror(errno);
     return out.str();
 }
 
-bool IsInterruptedSocketError() {
+bool IsInterruptedSocketError()
+{
     return errno == EINTR;
 }
 
 #endif
 
-bool SetSocketOption(ArpsSocket socket, int level, int name, int value) {
+bool SetSocketOption(ArpsSocket socket, int level, int name, int value)
+{
 #ifdef _WIN32
     const char* opt = reinterpret_cast<const char*>(&value);
 #else
     const void* opt = &value;
 #endif
-    return setsockopt(ToNative(socket), level, name, opt,
-            static_cast<int>(sizeof(value))) == 0;
+    return setsockopt(ToNative(socket), level, name, opt, static_cast<int>(sizeof(value))) == 0;
 }
 
 #ifdef _WIN32
-void CloseMany(ArpsSocket a, ArpsSocket b = kInvalidArpsSocket,
-        ArpsSocket c = kInvalidArpsSocket) {
+void CloseMany(ArpsSocket a, ArpsSocket b = kInvalidArpsSocket, ArpsSocket c = kInvalidArpsSocket)
+{
     Close(a);
     Close(b);
     Close(c);
 }
 #endif
 
-}  // namespace
+} // namespace detail
 
-bool IsInvalid(ArpsSocket socket) {
+using namespace detail;
+
+bool IsInvalid(ArpsSocket socket)
+{
     return socket == kInvalidArpsSocket;
 }
 
-bool EnsureRuntime(std::string* error) {
+bool EnsureRuntime(std::string* error)
+{
 #ifdef _WIN32
     static std::once_flag startup_once;
     static int startup_result = 0;
     std::call_once(startup_once, [] {
-        WSADATA data{};
+        WSADATA data {};
         startup_result = WSAStartup(MAKEWORD(2, 2), &data);
     });
     if (startup_result != 0) {
@@ -142,7 +159,8 @@ bool EnsureRuntime(std::string* error) {
     return true;
 }
 
-ArpsSocket OpenTcpSocket(std::string* error) {
+ArpsSocket OpenTcpSocket(std::string* error)
+{
     if (!EnsureRuntime(error)) {
         return kInvalidArpsSocket;
     }
@@ -161,7 +179,8 @@ ArpsSocket OpenTcpSocket(std::string* error) {
     return FromNative(socket);
 }
 
-void Close(ArpsSocket socket) {
+void Close(ArpsSocket socket)
+{
     if (IsInvalid(socket)) {
         return;
     }
@@ -172,15 +191,18 @@ void Close(ArpsSocket socket) {
 #endif
 }
 
-void SetReuseAddr(ArpsSocket socket) {
+void SetReuseAddr(ArpsSocket socket)
+{
     SetSocketOption(socket, SOL_SOCKET, SO_REUSEADDR, 1);
 }
 
-void SetTcpNoDelay(ArpsSocket socket) {
+void SetTcpNoDelay(ArpsSocket socket)
+{
     SetSocketOption(socket, IPPROTO_TCP, TCP_NODELAY, 1);
 }
 
-void SetNoSigpipe(ArpsSocket socket) {
+void SetNoSigpipe(ArpsSocket socket)
+{
 #ifdef SO_NOSIGPIPE
     SetSocketOption(socket, SOL_SOCKET, SO_NOSIGPIPE, 1);
 #else
@@ -188,9 +210,9 @@ void SetNoSigpipe(ArpsSocket socket) {
 #endif
 }
 
-bool BindIpv4(ArpsSocket socket, const std::string& host, std::uint16_t port,
-        std::string* error) {
-    sockaddr_in addr{};
+bool BindIpv4(ArpsSocket socket, const std::string& host, std::uint16_t port, std::string* error)
+{
+    sockaddr_in addr {};
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
     if (inet_pton(AF_INET, host.c_str(), &addr.sin_addr) != 1) {
@@ -199,8 +221,7 @@ bool BindIpv4(ArpsSocket socket, const std::string& host, std::uint16_t port,
         }
         return false;
     }
-    if (bind(ToNative(socket), reinterpret_cast<sockaddr*>(&addr),
-                static_cast<int>(sizeof(addr))) != 0) {
+    if (bind(ToNative(socket), reinterpret_cast<sockaddr*>(&addr), static_cast<int>(sizeof(addr))) != 0) {
         if (error) {
             *error = LastSocketErrorMessage("bind");
         }
@@ -209,7 +230,8 @@ bool BindIpv4(ArpsSocket socket, const std::string& host, std::uint16_t port,
     return true;
 }
 
-bool StartListening(ArpsSocket socket, int backlog, std::string* error) {
+bool StartListening(ArpsSocket socket, int backlog, std::string* error)
+{
     if (listen(ToNative(socket), backlog) != 0) {
         if (error) {
             *error = LastSocketErrorMessage("listen");
@@ -219,7 +241,8 @@ bool StartListening(ArpsSocket socket, int backlog, std::string* error) {
     return true;
 }
 
-ArpsSocket Accept(ArpsSocket socket, std::string* error) {
+ArpsSocket Accept(ArpsSocket socket, std::string* error)
+{
 #ifdef _WIN32
     SOCKET accepted = accept(ToNative(socket), nullptr, nullptr);
     if (accepted == INVALID_SOCKET) {
@@ -235,7 +258,8 @@ ArpsSocket Accept(ArpsSocket socket, std::string* error) {
     return FromNative(accepted);
 }
 
-ArpsSocket ConnectIpv4(const std::string& host, std::uint16_t port, std::string* error) {
+ArpsSocket ConnectIpv4(const std::string& host, std::uint16_t port, std::string* error)
+{
     ArpsSocket socket = OpenTcpSocket(error);
     if (IsInvalid(socket)) {
         return kInvalidArpsSocket;
@@ -243,7 +267,7 @@ ArpsSocket ConnectIpv4(const std::string& host, std::uint16_t port, std::string*
     SetTcpNoDelay(socket);
     SetNoSigpipe(socket);
 
-    sockaddr_in addr{};
+    sockaddr_in addr {};
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
     if (inet_pton(AF_INET, host.c_str(), &addr.sin_addr) != 1) {
@@ -253,8 +277,7 @@ ArpsSocket ConnectIpv4(const std::string& host, std::uint16_t port, std::string*
         Close(socket);
         return kInvalidArpsSocket;
     }
-    if (connect(ToNative(socket), reinterpret_cast<sockaddr*>(&addr),
-                static_cast<int>(sizeof(addr))) != 0) {
+    if (connect(ToNative(socket), reinterpret_cast<sockaddr*>(&addr), static_cast<int>(sizeof(addr))) != 0) {
         if (error) {
             *error = LastSocketErrorMessage("connect");
         }
@@ -264,14 +287,14 @@ ArpsSocket ConnectIpv4(const std::string& host, std::uint16_t port, std::string*
     return socket;
 }
 
-WaitStatus WaitReadable(ArpsSocket socket, int timeout_ms, const char* operation,
-        std::string* error) {
+WaitStatus WaitReadable(ArpsSocket socket, int timeout_ms, const char* operation, std::string* error)
+{
 #ifdef _WIN32
     fd_set readfds;
     FD_ZERO(&readfds);
     FD_SET(ToNative(socket), &readfds);
 
-    timeval timeout{};
+    timeval timeout {};
     timeval* timeout_ptr = nullptr;
     if (timeout_ms >= 0) {
         timeout.tv_sec = static_cast<long>(timeout_ms / 1000);
@@ -291,7 +314,7 @@ WaitStatus WaitReadable(ArpsSocket socket, int timeout_ms, const char* operation
     }
     return WaitStatus::Ready;
 #else
-    pollfd pfd{};
+    pollfd pfd {};
     pfd.fd = ToNative(socket);
     pfd.events = POLLIN;
     while (true) {
@@ -319,12 +342,12 @@ WaitStatus WaitReadable(ArpsSocket socket, int timeout_ms, const char* operation
 #endif
 }
 
-int Recv(ArpsSocket socket, std::uint8_t* data, std::size_t len, std::string* error) {
+int Recv(ArpsSocket socket, std::uint8_t* data, std::size_t len, std::string* error)
+{
     std::size_t chunk = std::min(len, static_cast<std::size_t>(kMaxIoChunk));
     while (true) {
 #ifdef _WIN32
-        int got = recv(ToNative(socket), reinterpret_cast<char*>(data),
-                static_cast<int>(chunk), 0);
+        int got = recv(ToNative(socket), reinterpret_cast<char*>(data), static_cast<int>(chunk), 0);
         if (got == SOCKET_ERROR) {
 #else
         ssize_t got = recv(ToNative(socket), data, chunk, 0);
@@ -342,12 +365,12 @@ int Recv(ArpsSocket socket, std::uint8_t* data, std::size_t len, std::string* er
     }
 }
 
-int Send(ArpsSocket socket, const std::uint8_t* data, std::size_t len, std::string* error) {
+int Send(ArpsSocket socket, const std::uint8_t* data, std::size_t len, std::string* error)
+{
     std::size_t chunk = std::min(len, static_cast<std::size_t>(kMaxIoChunk));
     while (true) {
 #ifdef _WIN32
-        int wrote = send(ToNative(socket), reinterpret_cast<const char*>(data),
-                static_cast<int>(chunk), 0);
+        int wrote = send(ToNative(socket), reinterpret_cast<const char*>(data), static_cast<int>(chunk), 0);
         if (wrote == SOCKET_ERROR) {
 #else
         int flags = 0;
@@ -369,7 +392,8 @@ int Send(ArpsSocket socket, const std::uint8_t* data, std::size_t len, std::stri
     }
 }
 
-bool CreateConnectedSocketPair(ArpsSocket sockets[2], std::string* error) {
+bool CreateConnectedSocketPair(ArpsSocket sockets[2], std::string* error)
+{
     sockets[0] = kInvalidArpsSocket;
     sockets[1] = kInvalidArpsSocket;
     if (!EnsureRuntime(error)) {
@@ -402,10 +426,9 @@ bool CreateConnectedSocketPair(ArpsSocket sockets[2], std::string* error) {
         return false;
     }
 
-    sockaddr_in bound{};
+    sockaddr_in bound {};
     int bound_len = static_cast<int>(sizeof(bound));
-    if (getsockname(ToNative(listener), reinterpret_cast<sockaddr*>(&bound), &bound_len)
-            != 0) {
+    if (getsockname(ToNative(listener), reinterpret_cast<sockaddr*>(&bound), &bound_len) != 0) {
         if (error) {
             *error = LastSocketErrorMessage("getsockname");
         }
@@ -418,8 +441,7 @@ bool CreateConnectedSocketPair(ArpsSocket sockets[2], std::string* error) {
         Close(listener);
         return false;
     }
-    if (connect(ToNative(client), reinterpret_cast<sockaddr*>(&bound),
-                static_cast<int>(sizeof(bound))) != 0) {
+    if (connect(ToNative(client), reinterpret_cast<sockaddr*>(&bound), static_cast<int>(sizeof(bound))) != 0) {
         if (error) {
             *error = LastSocketErrorMessage("connect");
         }
@@ -440,5 +462,5 @@ bool CreateConnectedSocketPair(ArpsSocket sockets[2], std::string* error) {
 #endif
 }
 
-}  // namespace socket_compat
-}  // namespace arps
+} // namespace socket_compat
+} // namespace arps

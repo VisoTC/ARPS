@@ -9,9 +9,11 @@
 #include "arps/protocol.h"
 #include "arps/socket.h"
 
-namespace arps {
+namespace arps
+{
 
-struct ArpsStartOptions {
+struct ArpsStartOptions
+{
     std::uint32_t display_id = 0;
     std::string pixel_format = "argb8888";
     std::string compression = "lz4_block";
@@ -26,7 +28,8 @@ struct ArpsStartOptions {
     std::string ToJson() const;
 };
 
-struct ArpsPowerControlOptions {
+struct ArpsPowerControlOptions
+{
     std::optional<std::uint32_t> display_id;
     std::string request_id;
     std::string reason;
@@ -37,7 +40,8 @@ struct ArpsPowerControlOptions {
     std::string ToJson() const;
 };
 
-struct ArpsPowerState {
+struct ArpsPowerState
+{
     std::string request_id;
     bool ok = false;
     std::string error;
@@ -48,7 +52,8 @@ struct ArpsPowerState {
     bool wake_lock_held_by_arps = false;
 };
 
-enum class ArpsReadStatus {
+enum class ArpsReadStatus
+{
     Frame,
     Hello,
     Ready,
@@ -60,7 +65,8 @@ enum class ArpsReadStatus {
     ProtocolError,
 };
 
-struct ArpsReadResult {
+struct ArpsReadResult
+{
     ArpsReadStatus status = ArpsReadStatus::Closed;
     ArpsFrame frame;
     ArpsPowerState power_state;
@@ -75,7 +81,8 @@ struct ArpsReadResult {
 // 生成用于 --session-token 的随机令牌；设备端会在 HELLO 中原样带回。
 std::string GenerateSessionToken();
 
-class ArpsReceiver {
+class ArpsReceiver
+{
 public:
     ArpsReceiver();
     ~ArpsReceiver();
@@ -93,13 +100,17 @@ public:
     void SetExpectedSessionToken(std::string token);
     bool SendPowerControl(const ArpsPowerControlOptions& options, std::string* error);
     bool RequestPowerState(const std::string& request_id, std::string* error);
-    bool SendPowerControl(bool keep_screen_on, bool power_on_if_screen_off,
-            const std::string& reason, std::string* error);
+    bool SendPowerControl(
+        bool keep_screen_on,
+        bool power_on_if_screen_off,
+        const std::string& reason,
+        std::string* error);
     bool SendStop(const std::string& reason, std::string* error);
     ArpsReadResult ReadNext(int timeout_ms);
     void Close();
 
     ArpsSocket client_socket() const { return client_socket_; }
+
     ArpsSocket client_fd() const { return client_socket_; }
 
 private:
@@ -116,4 +127,4 @@ private:
     Impl* impl_ = nullptr;
 };
 
-}  // namespace arps
+} // namespace arps

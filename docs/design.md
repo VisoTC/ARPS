@@ -48,7 +48,11 @@ gradle/wrapper/          Gradle Wrapper，随源码提交
 
 `host-debug/` 的源码属于项目基线，因为它是当前验证 `native-client` 和设备端链路的
 主要入口。它的构建产物、临时截图、抓帧 payload、参考仓库和其他本地状态不提交，
-应通过 `.gitignore` 排除。`host-debug/` 的开发期用途和使用方式见
+应通过 `.gitignore` 排除。
+
+`native-client/` 会被下游（如 MAA）原样拷贝进自己的仓库，因此它的代码风格跟随下游：
+`native-client/.clang-format` 与 MAA 的配置一致，修改后用 clang-format 23.1.1 格式化；
+不使用匿名命名空间，文件内部实现放在 `detail` 命名空间。`host-debug/` 的开发期用途和使用方式见
 `docs/host-debug.md`。
 
 ## 构建形态

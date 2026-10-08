@@ -4,9 +4,11 @@
 #include <cstdint>
 #include <string>
 
-namespace arps {
+namespace arps
+{
 
-struct ArpsFrameMeta {
+struct ArpsFrameMeta
+{
     std::uint16_t protocol_major = 0;
     std::uint16_t protocol_minor = 0;
     std::uint64_t frame_no = 0;
@@ -25,7 +27,8 @@ struct ArpsFrameMeta {
     std::uint32_t flags = 0;
 };
 
-struct ArpsDeviceTimings {
+struct ArpsDeviceTimings
+{
     double capture_ms = -1.0;
     double copy_ms = -1.0;
     double compress_ms = -1.0;
@@ -33,7 +36,8 @@ struct ArpsDeviceTimings {
     double previous_write_ms = -1.0;
 };
 
-struct ArpsFrame {
+struct ArpsFrame
+{
     ArpsFrameMeta meta;
     const std::uint8_t* argb8888 = nullptr;
     std::size_t argb8888_len = 0;
@@ -45,4 +49,4 @@ struct ArpsFrame {
     double decode_ms = -1.0;
 };
 
-}  // namespace arps
+} // namespace arps

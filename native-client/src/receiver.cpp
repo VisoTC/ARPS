@@ -15,13 +15,16 @@
 #include <utility>
 #include <vector>
 
-namespace arps {
-namespace {
+namespace arps
+{
+namespace detail
+{
 
 constexpr int kNoTimeout = -1;
 namespace sockets = socket_compat;
 
-struct RawPacket {
+struct RawPacket
+{
     std::uint16_t major = 0;
     std::uint16_t minor = 0;
     std::uint16_t type = 0;
@@ -34,74 +37,80 @@ struct RawPacket {
     double packet_read_ms = -1.0;
 };
 
-std::uint16_t ReadBe16(const std::uint8_t* p) {
+std::uint16_t ReadBe16(const std::uint8_t* p)
+{
     return static_cast<std::uint16_t>((p[0] << 8) | p[1]);
 }
 
-std::uint32_t ReadBe32(const std::uint8_t* p) {
-    return (static_cast<std::uint32_t>(p[0]) << 24)
-            | (static_cast<std::uint32_t>(p[1]) << 16)
-            | (static_cast<std::uint32_t>(p[2]) << 8)
-            | static_cast<std::uint32_t>(p[3]);
+std::uint32_t ReadBe32(const std::uint8_t* p)
+{
+    return (static_cast<std::uint32_t>(p[0]) << 24) | (static_cast<std::uint32_t>(p[1]) << 16) |
+           (static_cast<std::uint32_t>(p[2]) << 8) | static_cast<std::uint32_t>(p[3]);
 }
 
-std::uint64_t ReadBe64(const std::uint8_t* p) {
+std::uint64_t ReadBe64(const std::uint8_t* p)
+{
     return (static_cast<std::uint64_t>(ReadBe32(p)) << 32) | ReadBe32(p + 4);
 }
 
-void WriteBe16(std::vector<std::uint8_t>& out, std::uint16_t value) {
+void WriteBe16(std::vector<std::uint8_t>& out, std::uint16_t value)
+{
     out.push_back(static_cast<std::uint8_t>((value >> 8) & 0xff));
     out.push_back(static_cast<std::uint8_t>(value & 0xff));
 }
 
-void WriteBe32(std::vector<std::uint8_t>& out, std::uint32_t value) {
+void WriteBe32(std::vector<std::uint8_t>& out, std::uint32_t value)
+{
     out.push_back(static_cast<std::uint8_t>((value >> 24) & 0xff));
     out.push_back(static_cast<std::uint8_t>((value >> 16) & 0xff));
     out.push_back(static_cast<std::uint8_t>((value >> 8) & 0xff));
     out.push_back(static_cast<std::uint8_t>(value & 0xff));
 }
 
-std::string JsonString(const std::string& value) {
+std::string JsonString(const std::string& value)
+{
     static constexpr char kHex[] = "0123456789abcdef";
     std::ostringstream out;
     out << "\"";
     for (unsigned char ch : value) {
         switch (ch) {
-            case '\\':
-                out << "\\\\";
-                break;
-            case '"':
-                out << "\\\"";
-                break;
-            case '\b':
-                out << "\\b";
-                break;
-            case '\f':
-                out << "\\f";
-                break;
-            case '\n':
-                out << "\\n";
-                break;
-            case '\r':
-                out << "\\r";
-                break;
-            case '\t':
-                out << "\\t";
-                break;
-            default:
-                if (ch < 0x20) {
-                    out << "\\u00" << kHex[(ch >> 4) & 0xf] << kHex[ch & 0xf];
-                } else {
-                    out << static_cast<char>(ch);
-                }
-                break;
+        case '\\':
+            out << "\\\\";
+            break;
+        case '"':
+            out << "\\\"";
+            break;
+        case '\b':
+            out << "\\b";
+            break;
+        case '\f':
+            out << "\\f";
+            break;
+        case '\n':
+            out << "\\n";
+            break;
+        case '\r':
+            out << "\\r";
+            break;
+        case '\t':
+            out << "\\t";
+            break;
+        default:
+            if (ch < 0x20) {
+                out << "\\u00" << kHex[(ch >> 4) & 0xf] << kHex[ch & 0xf];
+            }
+            else {
+                out << static_cast<char>(ch);
+            }
+            break;
         }
     }
     out << "\"";
     return out.str();
 }
 
-void JsonFieldPrefix(std::ostringstream& out, bool* first, const char* key) {
+void JsonFieldPrefix(std::ostringstream& out, bool* first, const char* key)
+{
     if (!*first) {
         out << ",";
     }
@@ -109,7 +118,8 @@ void JsonFieldPrefix(std::ostringstream& out, bool* first, const char* key) {
     out << "\"" << key << "\":";
 }
 
-std::size_t JsonFieldValuePos(const std::string& json, const char* key) {
+std::size_t JsonFieldValuePos(const std::string& json, const char* key)
+{
     std::string quoted = std::string("\"") + key + "\"";
     std::size_t pos = json.find(quoted);
     if (pos == std::string::npos) {
@@ -120,14 +130,14 @@ std::size_t JsonFieldValuePos(const std::string& json, const char* key) {
         return std::string::npos;
     }
     ++pos;
-    while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t'
-                    || json[pos] == '\r' || json[pos] == '\n')) {
+    while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\r' || json[pos] == '\n')) {
         ++pos;
     }
     return pos;
 }
 
-bool JsonStringField(const std::string& json, const char* key, std::string* out) {
+bool JsonStringField(const std::string& json, const char* key, std::string* out)
+{
     std::size_t pos = JsonFieldValuePos(json, key);
     if (pos == std::string::npos || pos >= json.size() || json[pos] != '"') {
         return false;
@@ -143,38 +153,40 @@ bool JsonStringField(const std::string& json, const char* key, std::string* out)
         if (ch == '\\' && pos < json.size()) {
             char escaped = json[pos++];
             switch (escaped) {
-                case '"':
-                case '\\':
-                case '/':
-                    value << escaped;
-                    break;
-                case 'b':
-                    value << '\b';
-                    break;
-                case 'f':
-                    value << '\f';
-                    break;
-                case 'n':
-                    value << '\n';
-                    break;
-                case 'r':
-                    value << '\r';
-                    break;
-                case 't':
-                    value << '\t';
-                    break;
-                default:
-                    value << escaped;
-                    break;
+            case '"':
+            case '\\':
+            case '/':
+                value << escaped;
+                break;
+            case 'b':
+                value << '\b';
+                break;
+            case 'f':
+                value << '\f';
+                break;
+            case 'n':
+                value << '\n';
+                break;
+            case 'r':
+                value << '\r';
+                break;
+            case 't':
+                value << '\t';
+                break;
+            default:
+                value << escaped;
+                break;
             }
-        } else {
+        }
+        else {
             value << ch;
         }
     }
     return false;
 }
 
-bool JsonBoolField(const std::string& json, const char* key, bool fallback) {
+bool JsonBoolField(const std::string& json, const char* key, bool fallback)
+{
     std::size_t pos = JsonFieldValuePos(json, key);
     if (pos == std::string::npos) {
         return fallback;
@@ -188,8 +200,8 @@ bool JsonBoolField(const std::string& json, const char* key, bool fallback) {
     return fallback;
 }
 
-std::uint32_t JsonU32Field(const std::string& json, const char* key,
-        std::uint32_t fallback) {
+std::uint32_t JsonU32Field(const std::string& json, const char* key, std::uint32_t fallback)
+{
     std::size_t pos = JsonFieldValuePos(json, key);
     if (pos == std::string::npos) {
         return fallback;
@@ -202,17 +214,18 @@ std::uint32_t JsonU32Field(const std::string& json, const char* key,
     return static_cast<std::uint32_t>(parsed);
 }
 
-double MsSince(std::chrono::steady_clock::time_point start) {
+double MsSince(std::chrono::steady_clock::time_point start)
+{
     using Duration = std::chrono::duration<double, std::milli>;
     return Duration(std::chrono::steady_clock::now() - start).count();
 }
 
-int RemainingTimeoutMs(std::chrono::steady_clock::time_point deadline) {
+int RemainingTimeoutMs(std::chrono::steady_clock::time_point deadline)
+{
     if (deadline == std::chrono::steady_clock::time_point::max()) {
         return kNoTimeout;
     }
-    auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
-            deadline - std::chrono::steady_clock::now());
+    auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now());
     if (remaining.count() <= 0) {
         return 0;
     }
@@ -222,22 +235,24 @@ int RemainingTimeoutMs(std::chrono::steady_clock::time_point deadline) {
     return static_cast<int>(remaining.count());
 }
 
-std::chrono::steady_clock::time_point DeadlineFromTimeout(int timeout_ms) {
+std::chrono::steady_clock::time_point DeadlineFromTimeout(int timeout_ms)
+{
     if (timeout_ms < 0) {
         return std::chrono::steady_clock::time_point::max();
     }
     return std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
 }
 
-enum class IoStatus {
+enum class IoStatus
+{
     Ok,
     Timeout,
     Closed,
     Error,
 };
 
-IoStatus ReadExact(ArpsSocket socket, std::uint8_t* data, std::size_t len, int timeout_ms,
-        std::string* error) {
+IoStatus ReadExact(ArpsSocket socket, std::uint8_t* data, std::size_t len, int timeout_ms, std::string* error)
+{
     std::size_t offset = 0;
     auto deadline = DeadlineFromTimeout(timeout_ms);
     while (offset < len) {
@@ -261,8 +276,8 @@ IoStatus ReadExact(ArpsSocket socket, std::uint8_t* data, std::size_t len, int t
     return IoStatus::Ok;
 }
 
-IoStatus WriteExact(ArpsSocket socket, const std::uint8_t* data, std::size_t len,
-        std::string* error) {
+IoStatus WriteExact(ArpsSocket socket, const std::uint8_t* data, std::size_t len, std::string* error)
+{
     std::size_t offset = 0;
     while (offset < len) {
         int wrote = sockets::Send(socket, data + offset, len - offset, error);
@@ -280,9 +295,15 @@ IoStatus WriteExact(ArpsSocket socket, const std::uint8_t* data, std::size_t len
     return IoStatus::Ok;
 }
 
-bool ReadU32SectionLength(ArpsSocket socket, std::uint32_t packet_len,
-        std::uint32_t consumed,
-        int timeout_ms, std::uint32_t* out, std::string* error, IoStatus* status) {
+bool ReadU32SectionLength(
+    ArpsSocket socket,
+    std::uint32_t packet_len,
+    std::uint32_t consumed,
+    int timeout_ms,
+    std::uint32_t* out,
+    std::string* error,
+    IoStatus* status)
+{
     if (packet_len - consumed < 4) {
         if (error) {
             *error = "packet section length missing";
@@ -305,8 +326,14 @@ bool ReadU32SectionLength(ArpsSocket socket, std::uint32_t packet_len,
     return true;
 }
 
-bool ReadBytes(ArpsSocket socket, std::uint32_t len, int timeout_ms,
-        std::vector<std::uint8_t>* out, std::string* error, IoStatus* status) {
+bool ReadBytes(
+    ArpsSocket socket,
+    std::uint32_t len,
+    int timeout_ms,
+    std::vector<std::uint8_t>* out,
+    std::string* error,
+    IoStatus* status)
+{
     out->assign(len, 0);
     if (len == 0) {
         *status = IoStatus::Ok;
@@ -316,8 +343,8 @@ bool ReadBytes(ArpsSocket socket, std::uint32_t len, int timeout_ms,
     return *status == IoStatus::Ok;
 }
 
-bool SkipBytes(ArpsSocket socket, std::uint32_t len, int timeout_ms, std::string* error,
-        IoStatus* status) {
+bool SkipBytes(ArpsSocket socket, std::uint32_t len, int timeout_ms, std::string* error, IoStatus* status)
+{
     std::uint8_t buffer[16 * 1024];
     std::uint32_t remaining = len;
     while (remaining > 0) {
@@ -331,7 +358,8 @@ bool SkipBytes(ArpsSocket socket, std::uint32_t len, int timeout_ms, std::string
     return true;
 }
 
-std::uint32_t Crc32(const std::uint8_t* data, std::size_t len) {
+std::uint32_t Crc32(const std::uint8_t* data, std::size_t len)
+{
     std::uint32_t crc = 0xffffffffu;
     for (std::size_t i = 0; i < len; ++i) {
         crc ^= data[i];
@@ -343,7 +371,8 @@ std::uint32_t Crc32(const std::uint8_t* data, std::size_t len) {
     return ~crc;
 }
 
-double JsonNumber(const std::string& json, const char* key) {
+double JsonNumber(const std::string& json, const char* key)
+{
     std::string quoted = std::string("\"") + key + "\"";
     std::size_t pos = json.find(quoted);
     if (pos == std::string::npos) {
@@ -365,7 +394,8 @@ double JsonNumber(const std::string& json, const char* key) {
     return value;
 }
 
-ArpsDeviceTimings ParseTimings(const std::string& json) {
+ArpsDeviceTimings ParseTimings(const std::string& json)
+{
     ArpsDeviceTimings timings;
     timings.capture_ms = JsonNumber(json, "capture_ms");
     timings.copy_ms = JsonNumber(json, "copy_ms");
@@ -375,7 +405,8 @@ ArpsDeviceTimings ParseTimings(const std::string& json) {
     return timings;
 }
 
-ArpsPowerState ParsePowerState(const std::string& json) {
+ArpsPowerState ParsePowerState(const std::string& json)
+{
     ArpsPowerState state;
     JsonStringField(json, "request_id", &state.request_id);
     state.ok = JsonBoolField(json, "ok", false);
@@ -388,7 +419,8 @@ ArpsPowerState ParsePowerState(const std::string& json) {
     return state;
 }
 
-ArpsFrameMeta ParseFrameMeta(const RawPacket& packet) {
+ArpsFrameMeta ParseFrameMeta(const RawPacket& packet)
+{
     const std::uint8_t* p = packet.base.data();
     ArpsFrameMeta meta;
     meta.protocol_major = packet.major;
@@ -410,7 +442,8 @@ ArpsFrameMeta ParseFrameMeta(const RawPacket& packet) {
     return meta;
 }
 
-ArpsReadResult ProtocolError(std::string message, const RawPacket* packet = nullptr) {
+ArpsReadResult ProtocolError(std::string message, const RawPacket* packet = nullptr)
+{
     ArpsReadResult result;
     result.status = ArpsReadStatus::ProtocolError;
     result.message = std::move(message);
@@ -423,7 +456,8 @@ ArpsReadResult ProtocolError(std::string message, const RawPacket* packet = null
     return result;
 }
 
-ArpsReadResult StatusResult(ArpsReadStatus status, const RawPacket& packet) {
+ArpsReadResult StatusResult(ArpsReadStatus status, const RawPacket& packet)
+{
     ArpsReadResult result;
     result.status = status;
     result.packet_type = packet.type;
@@ -434,20 +468,24 @@ ArpsReadResult StatusResult(ArpsReadStatus status, const RawPacket& packet) {
     return result;
 }
 
-ArpsReadResult PowerStateResult(const RawPacket& packet) {
+ArpsReadResult PowerStateResult(const RawPacket& packet)
+{
     ArpsReadResult result = StatusResult(ArpsReadStatus::PowerState, packet);
     result.power_state = ParsePowerState(packet.ext);
     return result;
 }
 
-}  // namespace
+} // namespace detail
 
-class ArpsReceiver::Impl {
+using namespace detail;
+
+class ArpsReceiver::Impl
+{
 public:
     std::vector<std::uint8_t> frame_buffer;
 
-    ArpsReadResult ReadPacket(ArpsSocket socket, std::uint32_t max_packet_len,
-            int timeout_ms) {
+    ArpsReadResult ReadPacket(ArpsSocket socket, std::uint32_t max_packet_len, int timeout_ms)
+    {
         RawPacket packet;
         std::string error;
         IoStatus status = IoStatus::Ok;
@@ -495,8 +533,7 @@ public:
         std::uint32_t consumed = 0;
         std::uint32_t base_len = 0;
         int body_timeout_ms = kNoTimeout;
-        if (!ReadU32SectionLength(socket, packet.packet_len, consumed, body_timeout_ms,
-                    &base_len, &error, &status)) {
+        if (!ReadU32SectionLength(socket, packet.packet_len, consumed, body_timeout_ms, &base_len, &error, &status)) {
             return PacketReadFailure(status, error, &packet);
         }
         consumed += 4;
@@ -506,20 +543,17 @@ public:
         consumed += base_len;
 
         std::uint32_t bitmap_len = 0;
-        if (!ReadU32SectionLength(socket, packet.packet_len, consumed, body_timeout_ms,
-                    &bitmap_len, &error, &status)) {
+        if (!ReadU32SectionLength(socket, packet.packet_len, consumed, body_timeout_ms, &bitmap_len, &error, &status)) {
             return PacketReadFailure(status, error, &packet);
         }
         consumed += 4;
-        if (!ReadBytes(socket, bitmap_len, body_timeout_ms, &packet.bitmap, &error,
-                    &status)) {
+        if (!ReadBytes(socket, bitmap_len, body_timeout_ms, &packet.bitmap, &error, &status)) {
             return PacketReadFailure(status, error, &packet);
         }
         consumed += bitmap_len;
 
         std::uint32_t ext_len = 0;
-        if (!ReadU32SectionLength(socket, packet.packet_len, consumed, body_timeout_ms,
-                    &ext_len, &error, &status)) {
+        if (!ReadU32SectionLength(socket, packet.packet_len, consumed, body_timeout_ms, &ext_len, &error, &status)) {
             return PacketReadFailure(status, error, &packet);
         }
         consumed += 4;
@@ -540,26 +574,26 @@ public:
         packet.packet_read_ms = MsSince(start);
 
         switch (packet.type) {
-            case kPacketHello:
-                return StatusResult(ArpsReadStatus::Hello, packet);
-            case kPacketReady:
-                return StatusResult(ArpsReadStatus::Ready, packet);
-            case kPacketError:
-                return StatusResult(ArpsReadStatus::Error, packet);
-            case kPacketStop:
-                return StatusResult(ArpsReadStatus::Stop, packet);
-            case kPacketPowerState:
-                return PowerStateResult(packet);
-            case kPacketFrame:
-                return DecodeFrame(packet, max_packet_len);
-            default:
-                return ProtocolError("unknown packet_type", &packet);
+        case kPacketHello:
+            return StatusResult(ArpsReadStatus::Hello, packet);
+        case kPacketReady:
+            return StatusResult(ArpsReadStatus::Ready, packet);
+        case kPacketError:
+            return StatusResult(ArpsReadStatus::Error, packet);
+        case kPacketStop:
+            return StatusResult(ArpsReadStatus::Stop, packet);
+        case kPacketPowerState:
+            return PowerStateResult(packet);
+        case kPacketFrame:
+            return DecodeFrame(packet, max_packet_len);
+        default:
+            return ProtocolError("unknown packet_type", &packet);
         }
     }
 
 private:
-    ArpsReadResult PacketReadFailure(IoStatus status, const std::string& error,
-            const RawPacket* packet) {
+    ArpsReadResult PacketReadFailure(IoStatus status, const std::string& error, const RawPacket* packet)
+    {
         if (status == IoStatus::Timeout) {
             ArpsReadResult result;
             result.status = ArpsReadStatus::Timeout;
@@ -575,7 +609,8 @@ private:
         return ProtocolError(error.empty() ? "packet read failed" : error, packet);
     }
 
-    ArpsReadResult DecodeFrame(const RawPacket& packet, std::uint32_t max_packet_len) {
+    ArpsReadResult DecodeFrame(const RawPacket& packet, std::uint32_t max_packet_len)
+    {
         if (packet.base.size() < kFrameBaseLenV1) {
             return ProtocolError("FRAME base_len is smaller than BaseData v1", &packet);
         }
@@ -594,15 +629,13 @@ private:
             return ProtocolError("row_bytes is smaller than width * 4", &packet);
         }
         std::uint64_t expected_len = static_cast<std::uint64_t>(meta.row_bytes) * meta.height;
-        if (expected_len > std::numeric_limits<std::uint32_t>::max()
-                || meta.uncompressed_len != expected_len) {
+        if (expected_len > std::numeric_limits<std::uint32_t>::max() || meta.uncompressed_len != expected_len) {
             return ProtocolError("uncompressed_len does not equal row_bytes * height", &packet);
         }
         if (meta.uncompressed_len > max_packet_len) {
             return ProtocolError("uncompressed_len exceeds max_packet_len", &packet);
         }
-        if (meta.payload_checksum != 0
-                && Crc32(packet.bitmap.data(), packet.bitmap.size()) != meta.payload_checksum) {
+        if (meta.payload_checksum != 0 && Crc32(packet.bitmap.data(), packet.bitmap.size()) != meta.payload_checksum) {
             return ProtocolError("payload_checksum mismatch", &packet);
         }
 
@@ -612,22 +645,23 @@ private:
                 return ProtocolError("raw bitmap_len does not equal uncompressed_len", &packet);
             }
             frame_buffer = packet.bitmap;
-        } else if (meta.compression_type == kCompressionLz4Block) {
-            if (packet.bitmap.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())
-                    || meta.uncompressed_len > static_cast<std::uint32_t>(
-                            std::numeric_limits<int>::max())) {
+        }
+        else if (meta.compression_type == kCompressionLz4Block) {
+            if (packet.bitmap.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
+                meta.uncompressed_len > static_cast<std::uint32_t>(std::numeric_limits<int>::max())) {
                 return ProtocolError("LZ4 input or output exceeds decoder limits", &packet);
             }
             frame_buffer.assign(meta.uncompressed_len, 0);
             int decoded = LZ4_decompress_safe(
-                    reinterpret_cast<const char*>(packet.bitmap.data()),
-                    reinterpret_cast<char*>(frame_buffer.data()),
-                    static_cast<int>(packet.bitmap.size()),
-                    static_cast<int>(frame_buffer.size()));
+                reinterpret_cast<const char*>(packet.bitmap.data()),
+                reinterpret_cast<char*>(frame_buffer.data()),
+                static_cast<int>(packet.bitmap.size()),
+                static_cast<int>(frame_buffer.size()));
             if (decoded < 0 || static_cast<std::uint32_t>(decoded) != meta.uncompressed_len) {
                 return ProtocolError("LZ4 decompression failed or produced wrong length", &packet);
             }
-        } else {
+        }
+        else {
             return ProtocolError("unsupported compression_type", &packet);
         }
 
@@ -650,7 +684,8 @@ private:
     }
 };
 
-std::string ArpsStartOptions::ToJson() const {
+std::string ArpsStartOptions::ToJson() const
+{
     std::ostringstream out;
     out << "{"
         << "\"display_id\":" << display_id << ","
@@ -667,7 +702,8 @@ std::string ArpsStartOptions::ToJson() const {
     return out.str();
 }
 
-std::string ArpsPowerControlOptions::ToJson() const {
+std::string ArpsPowerControlOptions::ToJson() const
+{
     std::ostringstream out;
     bool first = true;
     out << "{";
@@ -699,14 +735,19 @@ std::string ArpsPowerControlOptions::ToJson() const {
     return out.str();
 }
 
-ArpsReceiver::ArpsReceiver() : impl_(new Impl()) {}
+ArpsReceiver::ArpsReceiver() :
+    impl_(new Impl())
+{
+}
 
-ArpsReceiver::~ArpsReceiver() {
+ArpsReceiver::~ArpsReceiver()
+{
     Close();
     delete impl_;
 }
 
-bool ArpsReceiver::Listen(const std::string& host, std::uint16_t port, std::string* error) {
+bool ArpsReceiver::Listen(const std::string& host, std::uint16_t port, std::string* error)
+{
     Close();
     ArpsSocket socket = sockets::OpenTcpSocket(error);
     if (sockets::IsInvalid(socket)) {
@@ -726,15 +767,16 @@ bool ArpsReceiver::Listen(const std::string& host, std::uint16_t port, std::stri
     return true;
 }
 
-bool ArpsReceiver::AcceptOnce(int timeout_ms, std::string* error) {
+bool ArpsReceiver::AcceptOnce(int timeout_ms, std::string* error)
+{
     if (sockets::IsInvalid(listen_socket_)) {
         if (error) {
             *error = "Listen() must be called before AcceptOnce()";
         }
         return false;
     }
-    sockets::WaitStatus wait = sockets::WaitReadable(listen_socket_,
-            timeout_ms < 0 ? kNoTimeout : timeout_ms, "wait(accept)", error);
+    sockets::WaitStatus wait =
+        sockets::WaitReadable(listen_socket_, timeout_ms < 0 ? kNoTimeout : timeout_ms, "wait(accept)", error);
     if (wait == sockets::WaitStatus::Timeout) {
         if (error) {
             *error = "accept timeout";
@@ -751,7 +793,8 @@ bool ArpsReceiver::AcceptOnce(int timeout_ms, std::string* error) {
     return AdoptConnectedSocket(socket, error);
 }
 
-bool ArpsReceiver::AdoptConnectedSocket(ArpsSocket socket, std::string* error) {
+bool ArpsReceiver::AdoptConnectedSocket(ArpsSocket socket, std::string* error)
+{
     if (sockets::IsInvalid(socket)) {
         if (error) {
             *error = "invalid connected socket";
@@ -767,33 +810,37 @@ bool ArpsReceiver::AdoptConnectedSocket(ArpsSocket socket, std::string* error) {
     return true;
 }
 
-bool ArpsReceiver::SendStart(const ArpsStartOptions& options, std::string* error) {
+bool ArpsReceiver::SendStart(const ArpsStartOptions& options, std::string* error)
+{
     max_packet_len_ = options.max_packet_len;
     return SendControlPacket(kPacketStart, options.ToJson(), error);
 }
 
-bool ArpsReceiver::RequestFrame(std::string* error) {
+bool ArpsReceiver::RequestFrame(std::string* error)
+{
     return SendControlPacket(kPacketFrameRequest, "{}", error);
 }
 
-bool ArpsReceiver::RequestFrame(const std::string& request_id, std::string* error) {
+bool ArpsReceiver::RequestFrame(const std::string& request_id, std::string* error)
+{
     if (request_id.empty()) {
         return RequestFrame(error);
     }
-    return SendControlPacket(kPacketFrameRequest,
-            "{\"request_id\":" + JsonString(request_id) + "}", error);
+    return SendControlPacket(kPacketFrameRequest, "{\"request_id\":" + JsonString(request_id) + "}", error);
 }
 
-void ArpsReceiver::SetExpectedSessionToken(std::string token) {
+void ArpsReceiver::SetExpectedSessionToken(std::string token)
+{
     expected_session_token_ = std::move(token);
 }
 
-bool ArpsReceiver::SendPowerControl(const ArpsPowerControlOptions& options,
-        std::string* error) {
+bool ArpsReceiver::SendPowerControl(const ArpsPowerControlOptions& options, std::string* error)
+{
     return SendControlPacket(kPacketPowerControl, options.ToJson(), error);
 }
 
-bool ArpsReceiver::RequestPowerState(const std::string& request_id, std::string* error) {
+bool ArpsReceiver::RequestPowerState(const std::string& request_id, std::string* error)
+{
     if (request_id.empty()) {
         if (error) {
             *error = "request_id must not be empty";
@@ -805,8 +852,12 @@ bool ArpsReceiver::RequestPowerState(const std::string& request_id, std::string*
     return SendPowerControl(options, error);
 }
 
-bool ArpsReceiver::SendPowerControl(bool keep_screen_on, bool power_on_if_screen_off,
-        const std::string& reason, std::string* error) {
+bool ArpsReceiver::SendPowerControl(
+    bool keep_screen_on,
+    bool power_on_if_screen_off,
+    const std::string& reason,
+    std::string* error)
+{
     ArpsPowerControlOptions options;
     options.keep_screen_on = keep_screen_on;
     options.power_on_if_screen_off = power_on_if_screen_off;
@@ -814,14 +865,15 @@ bool ArpsReceiver::SendPowerControl(bool keep_screen_on, bool power_on_if_screen
     return SendPowerControl(options, error);
 }
 
-bool ArpsReceiver::SendStop(const std::string& reason, std::string* error) {
+bool ArpsReceiver::SendStop(const std::string& reason, std::string* error)
+{
     std::ostringstream out;
     out << "{\"reason\":" << JsonString(reason) << "}";
     return SendControlPacket(kPacketStop, out.str(), error);
 }
 
-bool ArpsReceiver::SendControlPacket(std::uint16_t type, const std::string& ext,
-        std::string* error) {
+bool ArpsReceiver::SendControlPacket(std::uint16_t type, const std::string& ext, std::string* error)
+{
     if (sockets::IsInvalid(client_socket_)) {
         if (error) {
             *error = "no connected client";
@@ -846,7 +898,8 @@ bool ArpsReceiver::SendControlPacket(std::uint16_t type, const std::string& ext,
     return WriteExact(client_socket_, packet.data(), packet.size(), error) == IoStatus::Ok;
 }
 
-ArpsReadResult ArpsReceiver::ReadNext(int timeout_ms) {
+ArpsReadResult ArpsReceiver::ReadNext(int timeout_ms)
+{
     if (sockets::IsInvalid(client_socket_)) {
         ArpsReadResult result;
         result.status = ArpsReadStatus::Closed;
@@ -856,8 +909,7 @@ ArpsReadResult ArpsReceiver::ReadNext(int timeout_ms) {
     ArpsReadResult result = impl_->ReadPacket(client_socket_, max_packet_len_, timeout_ms);
     if (result.status == ArpsReadStatus::Hello && !expected_session_token_.empty()) {
         std::string token;
-        if (!JsonStringField(result.json, "session_token", &token)
-                || token != expected_session_token_) {
+        if (!JsonStringField(result.json, "session_token", &token) || token != expected_session_token_) {
             result.status = ArpsReadStatus::ProtocolError;
             result.message = "HELLO session_token mismatch";
         }
@@ -865,9 +917,9 @@ ArpsReadResult ArpsReceiver::ReadNext(int timeout_ms) {
     return result;
 }
 
-std::string GenerateSessionToken() {
-    static constexpr char kAlphabet[] =
-            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+std::string GenerateSessionToken()
+{
+    static constexpr char kAlphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     std::random_device device;
     std::uniform_int_distribution<std::size_t> pick(0, sizeof(kAlphabet) - 2);
     std::string token(32, '\0');
@@ -877,7 +929,8 @@ std::string GenerateSessionToken() {
     return token;
 }
 
-void ArpsReceiver::Close() {
+void ArpsReceiver::Close()
+{
     if (!sockets::IsInvalid(client_socket_)) {
         sockets::Close(client_socket_);
         client_socket_ = kInvalidArpsSocket;
@@ -888,4 +941,4 @@ void ArpsReceiver::Close() {
     }
 }
 
-}  // namespace arps
+} // namespace arps

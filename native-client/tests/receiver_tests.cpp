@@ -13,57 +13,64 @@
 #include <string>
 #include <vector>
 
-namespace {
+namespace
+{
 
 namespace compat = arps::socket_compat;
 
-[[noreturn]] void CheckFailed(const char* condition, const char* file, int line) {
+[[noreturn]] void CheckFailed(const char* condition, const char* file, int line)
+{
     std::cerr << "CHECK failed: " << condition << " at " << file << ":" << line << "\n";
     std::abort();
 }
 
-#define CHECK(condition) \
-    ((condition) ? static_cast<void>(0) : CheckFailed(#condition, __FILE__, __LINE__))
+#define CHECK(condition) ((condition) ? static_cast<void>(0) : CheckFailed(#condition, __FILE__, __LINE__))
 
-std::uint32_t U32Size(std::size_t size) {
+std::uint32_t U32Size(std::size_t size)
+{
     CHECK(size <= std::numeric_limits<std::uint32_t>::max());
     return static_cast<std::uint32_t>(size);
 }
 
-int IntSize(std::size_t size) {
+int IntSize(std::size_t size)
+{
     CHECK(size <= static_cast<std::size_t>(std::numeric_limits<int>::max()));
     return static_cast<int>(size);
 }
 
-void WriteBe16(std::vector<std::uint8_t>& out, std::uint16_t value) {
+void WriteBe16(std::vector<std::uint8_t>& out, std::uint16_t value)
+{
     out.push_back(static_cast<std::uint8_t>((value >> 8) & 0xff));
     out.push_back(static_cast<std::uint8_t>(value & 0xff));
 }
 
-void WriteBe32(std::vector<std::uint8_t>& out, std::uint32_t value) {
+void WriteBe32(std::vector<std::uint8_t>& out, std::uint32_t value)
+{
     out.push_back(static_cast<std::uint8_t>((value >> 24) & 0xff));
     out.push_back(static_cast<std::uint8_t>((value >> 16) & 0xff));
     out.push_back(static_cast<std::uint8_t>((value >> 8) & 0xff));
     out.push_back(static_cast<std::uint8_t>(value & 0xff));
 }
 
-void WriteBe64(std::vector<std::uint8_t>& out, std::uint64_t value) {
+void WriteBe64(std::vector<std::uint8_t>& out, std::uint64_t value)
+{
     WriteBe32(out, static_cast<std::uint32_t>(value >> 32));
     WriteBe32(out, static_cast<std::uint32_t>(value & 0xffffffffu));
 }
 
-void SendAll(arps::ArpsSocket socket, const std::vector<std::uint8_t>& bytes) {
+void SendAll(arps::ArpsSocket socket, const std::vector<std::uint8_t>& bytes)
+{
     std::size_t offset = 0;
     while (offset < bytes.size()) {
         std::string error;
-        int wrote = compat::Send(socket, bytes.data() + offset, bytes.size() - offset,
-                &error);
+        int wrote = compat::Send(socket, bytes.data() + offset, bytes.size() - offset, &error);
         CHECK(wrote > 0);
         offset += static_cast<std::size_t>(wrote);
     }
 }
 
-void RecvAll(arps::ArpsSocket socket, std::uint8_t* data, std::size_t len) {
+void RecvAll(arps::ArpsSocket socket, std::uint8_t* data, std::size_t len)
+{
     std::size_t offset = 0;
     while (offset < len) {
         std::string error;
@@ -73,19 +80,23 @@ void RecvAll(arps::ArpsSocket socket, std::uint8_t* data, std::size_t len) {
     }
 }
 
-std::uint32_t ReadBe32(const std::uint8_t* data) {
-    return (static_cast<std::uint32_t>(data[0]) << 24)
-            | (static_cast<std::uint32_t>(data[1]) << 16)
-            | (static_cast<std::uint32_t>(data[2]) << 8)
-            | static_cast<std::uint32_t>(data[3]);
+std::uint32_t ReadBe32(const std::uint8_t* data)
+{
+    return (static_cast<std::uint32_t>(data[0]) << 24) | (static_cast<std::uint32_t>(data[1]) << 16) |
+           (static_cast<std::uint32_t>(data[2]) << 8) | static_cast<std::uint32_t>(data[3]);
 }
 
-std::vector<std::uint8_t> FrameBase(std::uint32_t width, std::uint32_t height,
-        std::uint32_t row_bytes, std::uint32_t compression_type,
-        std::uint32_t uncompressed_len, std::uint32_t compressed_len) {
+std::vector<std::uint8_t> FrameBase(
+    std::uint32_t width,
+    std::uint32_t height,
+    std::uint32_t row_bytes,
+    std::uint32_t compression_type,
+    std::uint32_t uncompressed_len,
+    std::uint32_t compressed_len)
+{
     std::vector<std::uint8_t> base;
     WriteBe64(base, 7);
-    WriteBe64(base, 123456);
+    WriteBe64(base, 123'456);
     WriteBe32(base, width);
     WriteBe32(base, height);
     WriteBe32(base, row_bytes);
@@ -102,9 +113,13 @@ std::vector<std::uint8_t> FrameBase(std::uint32_t width, std::uint32_t height,
     return base;
 }
 
-std::vector<std::uint8_t> Packet(std::uint16_t type, const std::vector<std::uint8_t>& base,
-        const std::vector<std::uint8_t>& bitmap, const std::string& ext,
-        const std::vector<std::uint8_t>& tail = {}) {
+std::vector<std::uint8_t> Packet(
+    std::uint16_t type,
+    const std::vector<std::uint8_t>& base,
+    const std::vector<std::uint8_t>& bitmap,
+    const std::string& ext,
+    const std::vector<std::uint8_t>& tail = {})
+{
     std::vector<std::uint8_t> out;
     out.insert(out.end(), arps::kMagic, arps::kMagic + arps::kMagicSize);
     WriteBe16(out, arps::kProtocolMajor);
@@ -113,8 +128,8 @@ std::vector<std::uint8_t> Packet(std::uint16_t type, const std::vector<std::uint
     WriteBe16(out, arps::kHeaderLen);
     WriteBe32(out, 0);
     WriteBe32(out, 1);
-    std::uint32_t packet_len = 4u + U32Size(base.size()) + 4u + U32Size(bitmap.size())
-            + 4u + U32Size(ext.size()) + U32Size(tail.size());
+    std::uint32_t packet_len =
+        4u + U32Size(base.size()) + 4u + U32Size(bitmap.size()) + 4u + U32Size(ext.size()) + U32Size(tail.size());
     WriteBe32(out, packet_len);
     WriteBe32(out, U32Size(base.size()));
     out.insert(out.end(), base.begin(), base.end());
@@ -126,13 +141,15 @@ std::vector<std::uint8_t> Packet(std::uint16_t type, const std::vector<std::uint
     return out;
 }
 
-std::vector<std::uint8_t> PacketWithBadMagic() {
+std::vector<std::uint8_t> PacketWithBadMagic()
+{
     std::vector<std::uint8_t> bytes = Packet(arps::kPacketHello, {}, {}, "{}");
     bytes[0] = 'X';
     return bytes;
 }
 
-std::vector<std::uint8_t> PacketWithLargeLen() {
+std::vector<std::uint8_t> PacketWithLargeLen()
+{
     std::vector<std::uint8_t> out;
     out.insert(out.end(), arps::kMagic, arps::kMagic + arps::kMagicSize);
     WriteBe16(out, arps::kProtocolMajor);
@@ -146,7 +163,8 @@ std::vector<std::uint8_t> PacketWithLargeLen() {
 }
 
 template <typename Fn>
-void WithReadFromBytes(const std::vector<std::uint8_t>& bytes, Fn fn) {
+void WithReadFromBytes(const std::vector<std::uint8_t>& bytes, Fn fn)
+{
     arps::ArpsSocket sockets[2];
     std::string error;
     CHECK(compat::CreateConnectedSocketPair(sockets, &error));
@@ -158,7 +176,8 @@ void WithReadFromBytes(const std::vector<std::uint8_t>& bytes, Fn fn) {
     fn(result);
 }
 
-std::string ReadSentExt(arps::ArpsSocket socket, std::uint16_t expected_type) {
+std::string ReadSentExt(arps::ArpsSocket socket, std::uint16_t expected_type)
+{
     std::uint8_t header[arps::kHeaderLen];
     RecvAll(socket, header, sizeof(header));
     CHECK(std::memcmp(header, arps::kMagic, arps::kMagicSize) == 0);
@@ -178,102 +197,117 @@ std::string ReadSentExt(arps::ArpsSocket socket, std::uint16_t expected_type) {
     return std::string(reinterpret_cast<const char*>(ext_data), ext_len);
 }
 
-void TestHello() {
-    WithReadFromBytes(Packet(arps::kPacketHello, {}, {}, "{\"ok\":true}"),
-            [](const arps::ArpsReadResult& result) {
-                CHECK(result.status == arps::ArpsReadStatus::Hello);
-                CHECK(result.json == "{\"ok\":true}");
-            });
+void TestHello()
+{
+    WithReadFromBytes(Packet(arps::kPacketHello, {}, {}, "{\"ok\":true}"), [](const arps::ArpsReadResult& result) {
+        CHECK(result.status == arps::ArpsReadStatus::Hello);
+        CHECK(result.json == "{\"ok\":true}");
+    });
 }
 
-void TestReady() {
-    WithReadFromBytes(Packet(arps::kPacketReady, {}, {}, "{\"ready\":true}"),
-            [](const arps::ArpsReadResult& result) {
-                CHECK(result.status == arps::ArpsReadStatus::Ready);
-                CHECK(result.json == "{\"ready\":true}");
-            });
+void TestReady()
+{
+    WithReadFromBytes(Packet(arps::kPacketReady, {}, {}, "{\"ready\":true}"), [](const arps::ArpsReadResult& result) {
+        CHECK(result.status == arps::ArpsReadStatus::Ready);
+        CHECK(result.json == "{\"ready\":true}");
+    });
 }
 
-void TestControlStatuses() {
-    WithReadFromBytes(Packet(arps::kPacketError, {}, {}, "{\"message\":\"boom\"}"),
-            [](const arps::ArpsReadResult& result) {
-                CHECK(result.status == arps::ArpsReadStatus::Error);
-                CHECK(result.json == "{\"message\":\"boom\"}");
-            });
-    WithReadFromBytes(Packet(arps::kPacketStop, {}, {}, "{\"reason\":\"done\"}"),
-            [](const arps::ArpsReadResult& result) {
-                CHECK(result.status == arps::ArpsReadStatus::Stop);
-                CHECK(result.json == "{\"reason\":\"done\"}");
-            });
+void TestControlStatuses()
+{
+    WithReadFromBytes(
+        Packet(arps::kPacketError, {}, {}, "{\"message\":\"boom\"}"),
+        [](const arps::ArpsReadResult& result) {
+            CHECK(result.status == arps::ArpsReadStatus::Error);
+            CHECK(result.json == "{\"message\":\"boom\"}");
+        });
+    WithReadFromBytes(
+        Packet(arps::kPacketStop, {}, {}, "{\"reason\":\"done\"}"),
+        [](const arps::ArpsReadResult& result) {
+            CHECK(result.status == arps::ArpsReadStatus::Stop);
+            CHECK(result.json == "{\"reason\":\"done\"}");
+        });
 }
 
-void TestPowerState() {
-    WithReadFromBytes(Packet(arps::kPacketPowerState, {}, {},
+void TestPowerState()
+{
+    WithReadFromBytes(
+        Packet(
+            arps::kPacketPowerState,
+            {},
+            {},
             "{\"request_id\":\"q1\",\"ok\":true,\"error\":\"\","
             "\"reason\":\"query\",\"display_id\":2,\"screen_on\":true,"
             "\"previous_screen_on\":false,\"wake_lock_held_by_arps\":false}"),
-            [](const arps::ArpsReadResult& result) {
-                CHECK(result.status == arps::ArpsReadStatus::PowerState);
-                CHECK(result.power_state.request_id == "q1");
-                CHECK(result.power_state.ok);
-                CHECK(result.power_state.reason == "query");
-                CHECK(result.power_state.display_id == 2);
-                CHECK(result.power_state.screen_on);
-                CHECK(!result.power_state.previous_screen_on);
-                CHECK(!result.power_state.wake_lock_held_by_arps);
-            });
+        [](const arps::ArpsReadResult& result) {
+            CHECK(result.status == arps::ArpsReadStatus::PowerState);
+            CHECK(result.power_state.request_id == "q1");
+            CHECK(result.power_state.ok);
+            CHECK(result.power_state.reason == "query");
+            CHECK(result.power_state.display_id == 2);
+            CHECK(result.power_state.screen_on);
+            CHECK(!result.power_state.previous_screen_on);
+            CHECK(!result.power_state.wake_lock_held_by_arps);
+        });
 }
 
-void TestRawFrame() {
+void TestRawFrame()
+{
     std::vector<std::uint8_t> raw(4 * 3 * 4);
     for (std::size_t i = 0; i < raw.size(); ++i) {
         raw[i] = static_cast<std::uint8_t>(i);
     }
-    auto base = FrameBase(4, 3, 16, arps::kCompressionRaw, U32Size(raw.size()),
-            U32Size(raw.size()));
-    WithReadFromBytes(Packet(arps::kPacketFrame, base, raw,
-            "{\"request_id\":\"f-7\",\"capture_ms\":1.5,\"copy_ms\":0.5}", {1, 2, 3}),
-            [&raw](const arps::ArpsReadResult& result) {
-                CHECK(result.status == arps::ArpsReadStatus::Frame);
-                CHECK(result.protocol_major == arps::kProtocolMajor);
-                CHECK(result.protocol_minor == arps::kProtocolMinor);
-                CHECK(result.frame.request_id == "f-7");
-                CHECK(result.frame.meta.frame_no == 7);
-                CHECK(result.frame.meta.width == 4);
-                CHECK(result.frame.meta.height == 3);
-                CHECK(result.frame.argb8888_len == raw.size());
-                CHECK(std::memcmp(result.frame.argb8888, raw.data(), raw.size()) == 0);
-                CHECK(result.frame.device_timings.capture_ms == 1.5);
-            });
+    auto base = FrameBase(4, 3, 16, arps::kCompressionRaw, U32Size(raw.size()), U32Size(raw.size()));
+    WithReadFromBytes(
+        Packet(
+            arps::kPacketFrame,
+            base,
+            raw,
+            "{\"request_id\":\"f-7\",\"capture_ms\":1.5,\"copy_ms\":0.5}",
+            { 1, 2, 3 }),
+        [&raw](const arps::ArpsReadResult& result) {
+            CHECK(result.status == arps::ArpsReadStatus::Frame);
+            CHECK(result.protocol_major == arps::kProtocolMajor);
+            CHECK(result.protocol_minor == arps::kProtocolMinor);
+            CHECK(result.frame.request_id == "f-7");
+            CHECK(result.frame.meta.frame_no == 7);
+            CHECK(result.frame.meta.width == 4);
+            CHECK(result.frame.meta.height == 3);
+            CHECK(result.frame.argb8888_len == raw.size());
+            CHECK(std::memcmp(result.frame.argb8888, raw.data(), raw.size()) == 0);
+            CHECK(result.frame.device_timings.capture_ms == 1.5);
+        });
 }
 
-void TestLz4Frame() {
+void TestLz4Frame()
+{
     std::vector<std::uint8_t> raw(8 * 4 * 4);
     for (std::size_t i = 0; i < raw.size(); ++i) {
         raw[i] = static_cast<std::uint8_t>((i * 17) & 0xff);
     }
-    std::vector<std::uint8_t> compressed(
-            static_cast<std::size_t>(LZ4_compressBound(IntSize(raw.size()))));
-    int written = LZ4_compress_default(reinterpret_cast<const char*>(raw.data()),
-            reinterpret_cast<char*>(compressed.data()), IntSize(raw.size()),
-            IntSize(compressed.size()));
+    std::vector<std::uint8_t> compressed(static_cast<std::size_t>(LZ4_compressBound(IntSize(raw.size()))));
+    int written = LZ4_compress_default(
+        reinterpret_cast<const char*>(raw.data()),
+        reinterpret_cast<char*>(compressed.data()),
+        IntSize(raw.size()),
+        IntSize(compressed.size()));
     CHECK(written > 0);
     compressed.resize(static_cast<std::size_t>(written));
-    auto base = FrameBase(8, 4, 32, arps::kCompressionLz4Block, U32Size(raw.size()),
-            U32Size(compressed.size()));
-    WithReadFromBytes(Packet(arps::kPacketFrame, base, compressed,
-            "{\"compress_ms\":2.25}"), [&raw, &compressed](
-            const arps::ArpsReadResult& result) {
-                CHECK(result.status == arps::ArpsReadStatus::Frame);
-                CHECK(result.frame.argb8888_len == raw.size());
-                CHECK(std::memcmp(result.frame.argb8888, raw.data(), raw.size()) == 0);
-                CHECK(result.frame.bitmap_payload_len == compressed.size());
-                CHECK(result.frame.device_timings.compress_ms == 2.25);
-                CHECK(result.frame.request_id.empty());
-            });
+    auto base = FrameBase(8, 4, 32, arps::kCompressionLz4Block, U32Size(raw.size()), U32Size(compressed.size()));
+    WithReadFromBytes(
+        Packet(arps::kPacketFrame, base, compressed, "{\"compress_ms\":2.25}"),
+        [&raw, &compressed](const arps::ArpsReadResult& result) {
+            CHECK(result.status == arps::ArpsReadStatus::Frame);
+            CHECK(result.frame.argb8888_len == raw.size());
+            CHECK(std::memcmp(result.frame.argb8888, raw.data(), raw.size()) == 0);
+            CHECK(result.frame.bitmap_payload_len == compressed.size());
+            CHECK(result.frame.device_timings.compress_ms == 2.25);
+            CHECK(result.frame.request_id.empty());
+        });
 }
 
-void TestProtocolErrors() {
+void TestProtocolErrors()
+{
     WithReadFromBytes(PacketWithBadMagic(), [](const arps::ArpsReadResult& result) {
         CHECK(result.status == arps::ArpsReadStatus::ProtocolError);
     });
@@ -282,48 +316,40 @@ void TestProtocolErrors() {
     });
 
     std::vector<std::uint8_t> raw(16, static_cast<std::uint8_t>(0xaa));
-    auto short_base = FrameBase(2, 2, 8, arps::kCompressionRaw, U32Size(raw.size()),
-            U32Size(raw.size()));
+    auto short_base = FrameBase(2, 2, 8, arps::kCompressionRaw, U32Size(raw.size()), U32Size(raw.size()));
     short_base.resize(12);
-    WithReadFromBytes(Packet(arps::kPacketFrame, short_base, raw, ""),
-            [](const arps::ArpsReadResult& result) {
-                CHECK(result.status == arps::ArpsReadStatus::ProtocolError);
-            });
+    WithReadFromBytes(Packet(arps::kPacketFrame, short_base, raw, ""), [](const arps::ArpsReadResult& result) {
+        CHECK(result.status == arps::ArpsReadStatus::ProtocolError);
+    });
 
-    auto mismatch_base = FrameBase(2, 2, 8, arps::kCompressionRaw, U32Size(raw.size()),
-            U32Size(raw.size() + 1));
-    WithReadFromBytes(Packet(arps::kPacketFrame, mismatch_base, raw, ""),
-            [](const arps::ArpsReadResult& result) {
-                CHECK(result.status == arps::ArpsReadStatus::ProtocolError);
-            });
+    auto mismatch_base = FrameBase(2, 2, 8, arps::kCompressionRaw, U32Size(raw.size()), U32Size(raw.size() + 1));
+    WithReadFromBytes(Packet(arps::kPacketFrame, mismatch_base, raw, ""), [](const arps::ArpsReadResult& result) {
+        CHECK(result.status == arps::ArpsReadStatus::ProtocolError);
+    });
 
-    auto narrow_stride_base = FrameBase(1000, 2, 8, arps::kCompressionRaw, U32Size(raw.size()),
-            U32Size(raw.size()));
-    WithReadFromBytes(Packet(arps::kPacketFrame, narrow_stride_base, raw, ""),
-            [](const arps::ArpsReadResult& result) {
-                CHECK(result.status == arps::ArpsReadStatus::ProtocolError);
-            });
+    auto narrow_stride_base = FrameBase(1000, 2, 8, arps::kCompressionRaw, U32Size(raw.size()), U32Size(raw.size()));
+    WithReadFromBytes(Packet(arps::kPacketFrame, narrow_stride_base, raw, ""), [](const arps::ArpsReadResult& result) {
+        CHECK(result.status == arps::ArpsReadStatus::ProtocolError);
+    });
 
     std::uint32_t huge_height = arps::kDefaultMaxPacketLen / 4u + 1u;
     std::uint32_t huge_uncompressed_len = huge_height * 4u;
-    std::vector<std::uint8_t> tiny_lz4 = {0};
-    auto huge_lz4_base = FrameBase(1, huge_height, 4, arps::kCompressionLz4Block,
-            huge_uncompressed_len, U32Size(tiny_lz4.size()));
-    WithReadFromBytes(Packet(arps::kPacketFrame, huge_lz4_base, tiny_lz4, ""),
-            [](const arps::ArpsReadResult& result) {
-                CHECK(result.status == arps::ArpsReadStatus::ProtocolError);
-            });
+    std::vector<std::uint8_t> tiny_lz4 = { 0 };
+    auto huge_lz4_base =
+        FrameBase(1, huge_height, 4, arps::kCompressionLz4Block, huge_uncompressed_len, U32Size(tiny_lz4.size()));
+    WithReadFromBytes(Packet(arps::kPacketFrame, huge_lz4_base, tiny_lz4, ""), [](const arps::ArpsReadResult& result) {
+        CHECK(result.status == arps::ArpsReadStatus::ProtocolError);
+    });
 
-    std::vector<std::uint8_t> bad_lz4 = {0, 1, 2, 3, 4};
-    auto bad_lz4_base = FrameBase(2, 2, 8, arps::kCompressionLz4Block,
-            U32Size(raw.size()), U32Size(bad_lz4.size()));
-    WithReadFromBytes(Packet(arps::kPacketFrame, bad_lz4_base, bad_lz4, ""),
-            [](const arps::ArpsReadResult& result) {
-                CHECK(result.status == arps::ArpsReadStatus::ProtocolError);
-            });
+    std::vector<std::uint8_t> bad_lz4 = { 0, 1, 2, 3, 4 };
+    auto bad_lz4_base = FrameBase(2, 2, 8, arps::kCompressionLz4Block, U32Size(raw.size()), U32Size(bad_lz4.size()));
+    WithReadFromBytes(Packet(arps::kPacketFrame, bad_lz4_base, bad_lz4, ""), [](const arps::ArpsReadResult& result) {
+        CHECK(result.status == arps::ArpsReadStatus::ProtocolError);
+    });
 }
 
-void TestSendStart() {
+void TestSendStart()
+{
     arps::ArpsSocket sockets[2];
     std::string error;
     CHECK(compat::CreateConnectedSocketPair(sockets, &error));
@@ -354,7 +380,8 @@ void TestSendStart() {
     compat::Close(sockets[1]);
 }
 
-void TestRequestFrame() {
+void TestRequestFrame()
+{
     arps::ArpsSocket sockets[2];
     std::string error;
     CHECK(compat::CreateConnectedSocketPair(sockets, &error));
@@ -382,7 +409,8 @@ void TestRequestFrame() {
     compat::Close(sockets[1]);
 }
 
-void TestRequestFrameWithId() {
+void TestRequestFrameWithId()
+{
     arps::ArpsSocket sockets[2];
     std::string error;
     CHECK(compat::CreateConnectedSocketPair(sockets, &error));
@@ -393,8 +421,8 @@ void TestRequestFrameWithId() {
     compat::Close(sockets[1]);
 }
 
-arps::ArpsReadResult ReadHelloWithToken(const std::string& hello_json,
-        const std::string& expected_token) {
+arps::ArpsReadResult ReadHelloWithToken(const std::string& hello_json, const std::string& expected_token)
+{
     arps::ArpsSocket sockets[2];
     std::string error;
     CHECK(compat::CreateConnectedSocketPair(sockets, &error));
@@ -406,11 +434,10 @@ arps::ArpsReadResult ReadHelloWithToken(const std::string& hello_json,
     return receiver.ReadNext(1000);
 }
 
-void TestSessionToken() {
-    CHECK(ReadHelloWithToken("{\"session_token\":\"abc\"}", "abc").status
-            == arps::ArpsReadStatus::Hello);
-    CHECK(ReadHelloWithToken("{\"session_token\":\"xyz\"}", "abc").status
-            == arps::ArpsReadStatus::ProtocolError);
+void TestSessionToken()
+{
+    CHECK(ReadHelloWithToken("{\"session_token\":\"abc\"}", "abc").status == arps::ArpsReadStatus::Hello);
+    CHECK(ReadHelloWithToken("{\"session_token\":\"xyz\"}", "abc").status == arps::ArpsReadStatus::ProtocolError);
     CHECK(ReadHelloWithToken("{}", "abc").status == arps::ArpsReadStatus::ProtocolError);
     CHECK(ReadHelloWithToken("{}", "").status == arps::ArpsReadStatus::Hello);
 
@@ -422,7 +449,8 @@ void TestSessionToken() {
     CHECK(token != arps::GenerateSessionToken());
 }
 
-void TestSendPowerControl() {
+void TestSendPowerControl()
+{
     arps::ArpsSocket sockets[2];
     std::string error;
     CHECK(compat::CreateConnectedSocketPair(sockets, &error));
@@ -452,7 +480,8 @@ void TestSendPowerControl() {
     compat::Close(sockets[1]);
 }
 
-void TestSendPowerControlOptions() {
+void TestSendPowerControlOptions()
+{
     arps::ArpsSocket sockets[2];
     std::string error;
     CHECK(compat::CreateConnectedSocketPair(sockets, &error));
@@ -474,7 +503,8 @@ void TestSendPowerControlOptions() {
     compat::Close(sockets[1]);
 }
 
-void TestRequestPowerState() {
+void TestRequestPowerState()
+{
     arps::ArpsSocket sockets[2];
     std::string error;
     CHECK(compat::CreateConnectedSocketPair(sockets, &error));
@@ -486,7 +516,8 @@ void TestRequestPowerState() {
     compat::Close(sockets[1]);
 }
 
-void TestSendStop() {
+void TestSendStop()
+{
     arps::ArpsSocket sockets[2];
     std::string error;
     CHECK(compat::CreateConnectedSocketPair(sockets, &error));
@@ -514,9 +545,10 @@ void TestSendStop() {
     compat::Close(sockets[1]);
 }
 
-}  // namespace
+} // namespace
 
-int main() {
+int main()
+{
     TestHello();
     TestReady();
     TestControlStatuses();
