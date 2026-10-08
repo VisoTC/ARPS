@@ -331,15 +331,16 @@ arps::ArpsSocket Connect(const Args& args, std::string* error) {
 
 std::vector<std::uint8_t> BuildHello(std::uint32_t sequence) {
     std::string ext =
-            "{\"device\":{\"manufacturer\":\"mock\",\"brand\":\"host\","
+            "{\"arps_version\":\"mock\","
+            "\"device\":{\"manufacturer\":\"mock\",\"brand\":\"host\","
             "\"model\":\"synthetic\",\"android_sdk\":35,\"android_release\":\"mock\"},"
             "\"capabilities\":{\"pixel_formats\":[\"argb8888\"],"
             "\"compressions\":[\"raw\",\"lz4_block\"],\"screen_power\":false,"
             "\"max_packet_len\":67108864,\"native_lz4\":true,"
-            "\"stream_modes\":[\"push\",\"pull\"],"
+            "\"stream_modes\":[\"push\",\"pull\"],\"frame_request_id\":true,"
             "\"runtime_power_control\":[\"keep_screen_on\","
             "\"power_on_if_screen_off\",\"request_id\",\"power_state\","
-            "\"screen_interactive\",\"display_power\"]}}";
+            "\"screen_interactive\"]}}";
     return BuildPacket(arps::kPacketHello, {}, {}, ext, sequence);
 }
 
@@ -354,8 +355,7 @@ std::string PowerStateExt(const std::string& control_ext) {
         << "\"display_id\":0,"
         << "\"screen_on\":true,"
         << "\"previous_screen_on\":true,"
-        << "\"wake_lock_held_by_arps\":false,"
-        << "\"display_power_override\":\"unknown\"}";
+        << "\"wake_lock_held_by_arps\":false}";
     return out.str();
 }
 
@@ -402,9 +402,14 @@ std::vector<std::uint8_t> BuildFrameBase(std::uint64_t frame_no, std::uint32_t w
     return base;
 }
 
-std::string FrameExt(double capture_ms, double compress_ms, double previous_write_ms) {
+std::string FrameExt(const std::string& request_id, double capture_ms, double compress_ms,
+        double previous_write_ms) {
     std::ostringstream out;
-    out << "{\"capture_api\":\"host-debug.mock-source\","
+    out << "{";
+    if (!request_id.empty()) {
+        out << "\"request_id\":\"" << request_id << "\",";
+    }
+    out << "\"capture_api\":\"host-debug.mock-source\","
         << "\"capture_ms\":" << capture_ms << ","
         << "\"copy_ms\":0,"
         << "\"compress_ms\":" << compress_ms << ","
@@ -522,6 +527,7 @@ int main(int argc, char** argv) {
     std::uint64_t frame_no = 0;
     while (args.frames == 0 || frame_no < args.frames) {
         auto frame_start = std::chrono::steady_clock::now();
+        std::string request_id;
         if (stream_mode == "pull") {
             Packet request;
             if (!ReadPacket(socket, &request, &error)) {
@@ -549,6 +555,7 @@ int main(int argc, char** argv) {
                 sockets::Close(socket);
                 return 1;
             }
+            request_id = JsonString(request.ext, "request_id", "");
         }
         frame_no++;
         if (!PrepareFrame(args, compression, frame_no, &raw, &payload, &prepared)) {
@@ -558,7 +565,7 @@ int main(int argc, char** argv) {
 
         std::vector<std::uint8_t> base = BuildFrameBase(frame_no, args.width, args.height,
                 prepared.compression_type, U32Size(raw.size()), U32Size(payload.size()));
-        std::string ext = FrameExt(prepared.capture_ms, prepared.compress_ms,
+        std::string ext = FrameExt(request_id, prepared.capture_ms, prepared.compress_ms,
                 previous_write_ms);
         std::vector<std::uint8_t> packet = BuildPacket(arps::kPacketFrame, base, payload, ext,
                 sequence++);

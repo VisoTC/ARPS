@@ -144,7 +144,6 @@ def main():
         "max_fps": 30,
         "max_packet_len": max_packet_len,
         "power_on_if_screen_off": True,
-        "turn_screen_off": False,
         "keep_screen_on": True,
         "exit_power_mode": "restore_previous",
         "stream_mode": args.stream_mode,
@@ -177,8 +176,11 @@ def main():
             last_payload = None
             frames_read = 0
             while frames_read < args.frames:
+                request_id = None
                 if args.stream_mode == "pull":
-                    write_packet(conn, TYPE_FRAME_REQUEST, ext=b"{}", sequence=sequence)
+                    request_id = f"frame-{frames_read + 1}"
+                    request = json.dumps({"request_id": request_id}).encode("utf-8")
+                    write_packet(conn, TYPE_FRAME_REQUEST, ext=request, sequence=sequence)
                     sequence += 1
                 while True:
                     packet = read_packet(conn, max_packet_len)
@@ -195,6 +197,10 @@ def main():
                 if packet["type"] != TYPE_FRAME:
                     raise ValueError(f"unexpected packet type={packet['type']}")
 
+                frame_ext = json.loads(packet["ext"] or b"{}")
+                if request_id is not None and frame_ext.get("request_id") != request_id:
+                    raise ValueError(
+                        f"FRAME request_id {frame_ext.get('request_id')!r} != {request_id!r}")
                 meta = parse_frame_base(packet["base"])
                 if meta["compressed_len"] != len(packet["bitmap"]):
                     raise ValueError("compressed_len does not match bitmap payload length")

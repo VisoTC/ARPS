@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <random>
 #include <sstream>
 #include <utility>
 #include <vector>
@@ -384,10 +385,6 @@ ArpsPowerState ParsePowerState(const std::string& json) {
     state.screen_on = JsonBoolField(json, "screen_on", false);
     state.previous_screen_on = JsonBoolField(json, "previous_screen_on", false);
     state.wake_lock_held_by_arps = JsonBoolField(json, "wake_lock_held_by_arps", false);
-    JsonStringField(json, "display_power_override", &state.display_power_override);
-    if (state.display_power_override.empty()) {
-        state.display_power_override = "unknown";
-    }
     return state;
 }
 
@@ -419,6 +416,8 @@ ArpsReadResult ProtocolError(std::string message, const RawPacket* packet = null
     result.message = std::move(message);
     if (packet) {
         result.packet_type = packet->type;
+        result.protocol_major = packet->major;
+        result.protocol_minor = packet->minor;
         result.sequence = packet->sequence;
     }
     return result;
@@ -428,6 +427,8 @@ ArpsReadResult StatusResult(ArpsReadStatus status, const RawPacket& packet) {
     ArpsReadResult result;
     result.status = status;
     result.packet_type = packet.type;
+    result.protocol_major = packet.major;
+    result.protocol_minor = packet.minor;
     result.sequence = packet.sequence;
     result.json = packet.ext;
     return result;
@@ -633,12 +634,15 @@ private:
         ArpsReadResult result;
         result.status = ArpsReadStatus::Frame;
         result.packet_type = packet.type;
+        result.protocol_major = packet.major;
+        result.protocol_minor = packet.minor;
         result.sequence = packet.sequence;
         result.frame.meta = meta;
         result.frame.argb8888 = frame_buffer.data();
         result.frame.argb8888_len = frame_buffer.size();
         result.frame.bitmap_payload_len = packet.bitmap.size();
         result.frame.ext_json = packet.ext;
+        JsonStringField(packet.ext, "request_id", &result.frame.request_id);
         result.frame.device_timings = ParseTimings(packet.ext);
         result.frame.packet_read_ms = packet.packet_read_ms;
         result.frame.decode_ms = MsSince(decode_start);
@@ -655,7 +659,6 @@ std::string ArpsStartOptions::ToJson() const {
         << "\"max_fps\":" << max_fps << ","
         << "\"max_packet_len\":" << max_packet_len << ","
         << "\"power_on_if_screen_off\":" << (power_on_if_screen_off ? "true" : "false") << ","
-        << "\"turn_screen_off\":" << (turn_screen_off ? "true" : "false") << ","
         << "\"keep_screen_on\":" << (keep_screen_on ? "true" : "false") << ","
         << "\"capture_mode\":\"" << capture_mode << "\","
         << "\"exit_power_mode\":\"" << exit_power_mode << "\","
@@ -691,10 +694,6 @@ std::string ArpsPowerControlOptions::ToJson() const {
     if (screen_interactive.has_value()) {
         JsonFieldPrefix(out, &first, "screen_interactive");
         out << JsonString(*screen_interactive);
-    }
-    if (display_power.has_value()) {
-        JsonFieldPrefix(out, &first, "display_power");
-        out << JsonString(*display_power);
     }
     out << "}";
     return out.str();
@@ -777,6 +776,18 @@ bool ArpsReceiver::RequestFrame(std::string* error) {
     return SendControlPacket(kPacketFrameRequest, "{}", error);
 }
 
+bool ArpsReceiver::RequestFrame(const std::string& request_id, std::string* error) {
+    if (request_id.empty()) {
+        return RequestFrame(error);
+    }
+    return SendControlPacket(kPacketFrameRequest,
+            "{\"request_id\":" + JsonString(request_id) + "}", error);
+}
+
+void ArpsReceiver::SetExpectedSessionToken(std::string token) {
+    expected_session_token_ = std::move(token);
+}
+
 bool ArpsReceiver::SendPowerControl(const ArpsPowerControlOptions& options,
         std::string* error) {
     return SendControlPacket(kPacketPowerControl, options.ToJson(), error);
@@ -842,7 +853,28 @@ ArpsReadResult ArpsReceiver::ReadNext(int timeout_ms) {
         result.message = "no connected client";
         return result;
     }
-    return impl_->ReadPacket(client_socket_, max_packet_len_, timeout_ms);
+    ArpsReadResult result = impl_->ReadPacket(client_socket_, max_packet_len_, timeout_ms);
+    if (result.status == ArpsReadStatus::Hello && !expected_session_token_.empty()) {
+        std::string token;
+        if (!JsonStringField(result.json, "session_token", &token)
+                || token != expected_session_token_) {
+            result.status = ArpsReadStatus::ProtocolError;
+            result.message = "HELLO session_token mismatch";
+        }
+    }
+    return result;
+}
+
+std::string GenerateSessionToken() {
+    static constexpr char kAlphabet[] =
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    std::random_device device;
+    std::uniform_int_distribution<std::size_t> pick(0, sizeof(kAlphabet) - 2);
+    std::string token(32, '\0');
+    for (char& c : token) {
+        c = kAlphabet[pick(device)];
+    }
+    return token;
 }
 
 void ArpsReceiver::Close() {

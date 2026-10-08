@@ -4,6 +4,7 @@
 
 #include <lz4.h>
 
+#include <cctype>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -210,8 +211,7 @@ void TestPowerState() {
     WithReadFromBytes(Packet(arps::kPacketPowerState, {}, {},
             "{\"request_id\":\"q1\",\"ok\":true,\"error\":\"\","
             "\"reason\":\"query\",\"display_id\":2,\"screen_on\":true,"
-            "\"previous_screen_on\":false,\"wake_lock_held_by_arps\":false,"
-            "\"display_power_override\":\"unknown\"}"),
+            "\"previous_screen_on\":false,\"wake_lock_held_by_arps\":false}"),
             [](const arps::ArpsReadResult& result) {
                 CHECK(result.status == arps::ArpsReadStatus::PowerState);
                 CHECK(result.power_state.request_id == "q1");
@@ -221,7 +221,6 @@ void TestPowerState() {
                 CHECK(result.power_state.screen_on);
                 CHECK(!result.power_state.previous_screen_on);
                 CHECK(!result.power_state.wake_lock_held_by_arps);
-                CHECK(result.power_state.display_power_override == "unknown");
             });
 }
 
@@ -233,9 +232,12 @@ void TestRawFrame() {
     auto base = FrameBase(4, 3, 16, arps::kCompressionRaw, U32Size(raw.size()),
             U32Size(raw.size()));
     WithReadFromBytes(Packet(arps::kPacketFrame, base, raw,
-            "{\"capture_ms\":1.5,\"copy_ms\":0.5}", {1, 2, 3}),
+            "{\"request_id\":\"f-7\",\"capture_ms\":1.5,\"copy_ms\":0.5}", {1, 2, 3}),
             [&raw](const arps::ArpsReadResult& result) {
                 CHECK(result.status == arps::ArpsReadStatus::Frame);
+                CHECK(result.protocol_major == arps::kProtocolMajor);
+                CHECK(result.protocol_minor == arps::kProtocolMinor);
+                CHECK(result.frame.request_id == "f-7");
                 CHECK(result.frame.meta.frame_no == 7);
                 CHECK(result.frame.meta.width == 4);
                 CHECK(result.frame.meta.height == 3);
@@ -267,6 +269,7 @@ void TestLz4Frame() {
                 CHECK(std::memcmp(result.frame.argb8888, raw.data(), raw.size()) == 0);
                 CHECK(result.frame.bitmap_payload_len == compressed.size());
                 CHECK(result.frame.device_timings.compress_ms == 2.25);
+                CHECK(result.frame.request_id.empty());
             });
 }
 
@@ -345,7 +348,8 @@ void TestSendStart() {
     const std::uint8_t* ext_data = packet.data() + 4 + base_len + 4 + bitmap_len + 4;
     std::string ext(reinterpret_cast<const char*>(ext_data), ext_len);
     CHECK(ext.find("\"keep_screen_on\":true") != std::string::npos);
-    CHECK(ext.find("\"stream_mode\":\"push\"") != std::string::npos);
+    CHECK(ext.find("\"stream_mode\":\"pull\"") != std::string::npos);
+    CHECK(ext.find("turn_screen_off") == std::string::npos);
     CHECK(ext.find("require_non_black_start") == std::string::npos);
     compat::Close(sockets[1]);
 }
@@ -376,6 +380,46 @@ void TestRequestFrame() {
     CHECK(bitmap_len == 0);
     CHECK(ext == "{}");
     compat::Close(sockets[1]);
+}
+
+void TestRequestFrameWithId() {
+    arps::ArpsSocket sockets[2];
+    std::string error;
+    CHECK(compat::CreateConnectedSocketPair(sockets, &error));
+    arps::ArpsReceiver receiver;
+    CHECK(receiver.AdoptConnectedSocket(sockets[0], &error));
+    CHECK(receiver.RequestFrame("frame-1", &error));
+    CHECK(ReadSentExt(sockets[1], arps::kPacketFrameRequest) == "{\"request_id\":\"frame-1\"}");
+    compat::Close(sockets[1]);
+}
+
+arps::ArpsReadResult ReadHelloWithToken(const std::string& hello_json,
+        const std::string& expected_token) {
+    arps::ArpsSocket sockets[2];
+    std::string error;
+    CHECK(compat::CreateConnectedSocketPair(sockets, &error));
+    SendAll(sockets[1], Packet(arps::kPacketHello, {}, {}, hello_json));
+    compat::Close(sockets[1]);
+    arps::ArpsReceiver receiver;
+    receiver.SetExpectedSessionToken(expected_token);
+    CHECK(receiver.AdoptConnectedSocket(sockets[0], &error));
+    return receiver.ReadNext(1000);
+}
+
+void TestSessionToken() {
+    CHECK(ReadHelloWithToken("{\"session_token\":\"abc\"}", "abc").status
+            == arps::ArpsReadStatus::Hello);
+    CHECK(ReadHelloWithToken("{\"session_token\":\"xyz\"}", "abc").status
+            == arps::ArpsReadStatus::ProtocolError);
+    CHECK(ReadHelloWithToken("{}", "abc").status == arps::ArpsReadStatus::ProtocolError);
+    CHECK(ReadHelloWithToken("{}", "").status == arps::ArpsReadStatus::Hello);
+
+    std::string token = arps::GenerateSessionToken();
+    CHECK(token.size() == 32);
+    for (char c : token) {
+        CHECK(std::isalnum(static_cast<unsigned char>(c)));
+    }
+    CHECK(token != arps::GenerateSessionToken());
 }
 
 void TestSendPowerControl() {
@@ -418,13 +462,12 @@ void TestSendPowerControlOptions() {
     options.request_id = "task-end-1";
     options.reason = "task_end";
     options.keep_screen_on = false;
-    options.display_power = "off";
     CHECK(receiver.SendPowerControl(options, &error));
     std::string ext = ReadSentExt(sockets[1], arps::kPacketPowerControl);
     CHECK(ext.find("\"request_id\":\"task-end-1\"") != std::string::npos);
     CHECK(ext.find("\"reason\":\"task_end\"") != std::string::npos);
     CHECK(ext.find("\"keep_screen_on\":false") != std::string::npos);
-    CHECK(ext.find("\"display_power\":\"off\"") != std::string::npos);
+    CHECK(ext.find("display_power") == std::string::npos);
     CHECK(ext.find("power_on_if_screen_off") == std::string::npos);
     CHECK(ext.find("screen_interactive") == std::string::npos);
     CHECK(ext.find("display_id") == std::string::npos);
@@ -483,6 +526,8 @@ int main() {
     TestProtocolErrors();
     TestSendStart();
     TestRequestFrame();
+    TestRequestFrameWithId();
+    TestSessionToken();
     TestSendPowerControl();
     TestSendPowerControlOptions();
     TestRequestPowerState();

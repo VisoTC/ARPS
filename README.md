@@ -5,7 +5,8 @@
 **A**ndroid **R**aw **P**ixel **S**tream —— Android 屏幕原始帧采集组件。
 
 ARPS 在 Android shell 环境通过 `app_process` 运行（不安装为普通应用），采集主显示屏的
-`ARGB_8888` 原始像素，经 native LZ4 压缩后，通过 adb reverse / TCP 主动连接主机并推送连续帧。
+`ARGB_8888` 原始像素，经 native LZ4 压缩后，通过 adb reverse / TCP 主动连接主机。主机每发一次
+`FRAME_REQUEST`，设备端就现场采集并返回一帧（pull）；调试预览时也可以切换为连续推流（push）。
 
 它的首要目标不是完整投屏工具，而是为 C++ 自动化框架提供稳定、低依赖、可嵌入的屏幕帧输入。
 
@@ -15,8 +16,8 @@ ARPS 在 Android shell 环境通过 `app_process` 运行（不安装为普通应
 - 输出无损 `ARGB_8888` 像素和必要的帧元数据（宽高、`row_bytes`、rotation、color space 等）。
 - native LZ4 压缩（`liblz4arps.so`），无纯 Java 回退路径。
 - 设备端以 `app_process` 启动，不安装 apk，不保留 Activity / UI。
-- 启动时可点亮屏幕、可选关闭物理屏幕输出、退出时恢复或设置屏幕状态。
-- 明确的二进制协议 v1.1，承载帧数据、控制消息、电源状态、错误消息和扩展字段。
+- 启动时可点亮屏幕、运行期保持亮屏，退出时恢复或设置屏幕状态。
+- 明确的二进制协议 v1.2，承载帧数据、控制消息、电源状态、错误消息和扩展字段。
 
 ### 非目标
 
@@ -48,8 +49,8 @@ device connect 127.0.0.1:<port>
 device -> HELLO
 host   -> START
 device -> READY
-push: device -> FRAME...
 pull: host -> FRAME_REQUEST, device -> FRAME
+push: device -> FRAME...
 host   -> POWER_CONTROL
 device -> POWER_STATE
 host closes socket or device sends STOP/ERROR
@@ -128,8 +129,12 @@ cmake --build host-debug/build-win --config Release
 ```bash
 adb push device/build/outputs/apk/debug/arps-device.apk /data/local/tmp/arps-device.apk
 adb shell CLASSPATH=/data/local/tmp/arps-device.apk \
-  app_process / com.visotc.ARPS.Main --connect-port=27183
+  app_process / com.visotc.ARPS.Main --connect-port=27183 --session-token=<token>
 ```
+
+`--session-token` 可选。主机生成随机令牌传给设备端，设备端在 `HELLO` 中原样带回；
+`native-client` 通过 `SetExpectedSessionToken()` 校验，用来拒绝设备上其他进程经同一
+adb reverse 端口冒充 ARPS 的连接。
 
 设备端的最终流模式由主机在 `START.stream_mode` 中下发；命令行 `--stream-mode`
 只是在收到 `START` 前的默认值。
@@ -153,7 +158,7 @@ host-debug/cli/build/arps-host-debug \
 ```
 
 常用参数：`--host` `--port` `--compression=raw|lz4_block` `--max-fps` `--display-id`
-`--turn-screen-off` `--keep-screen-on` `--capture-mode=auto|hardware|bitmap`
+`--keep-screen-on` `--capture-mode=auto|hardware|bitmap`
 `--stream-mode=push|pull` `--exit-power-mode=restore_previous|keep_on|turn_off`
 `--serial` `--apk` `--adb`。
 
@@ -184,17 +189,18 @@ python3 host-debug/minirecv/arps_minirecv.py \
 ```
 
 `minirecv --stream-mode pull` 会在 `START.stream_mode` 中要求设备进入 pull 模式，
-因此配套设备命令无需重复传 `--stream-mode=pull`。
+因此配套设备命令无需重复传 `--stream-mode=pull`。pull 模式下它会给每个 `FRAME_REQUEST`
+带上 `request_id`，并检查返回的 `FRAME` 是否原样带回。
 
-## 协议 v1.1（概要）
+## 协议 v1.2（概要）
 
-ARPS v1.1 运行在单条有序 TCP 连接上，多字节整数一律 big-endian，包边界由长度字段划分
+ARPS v1.2 运行在单条有序 TCP 连接上，多字节整数一律 big-endian，包边界由长度字段划分
 （不依赖 TCP EOF）。
 
 ```text
 magic            = "ARPSBYVISOTC"   # 12 bytes ASCII
 protocol_major   = 1
-protocol_minor   = 1
+protocol_minor   = 2
 fixed_header_len = 32
 default_max_len  = 64 MiB
 ```
@@ -207,6 +213,10 @@ default_max_len  = 64 MiB
 `FRAME` 在 64 字节定长 `BaseData` 中携带帧元数据，`BitmapPayload` 为 `raw` 或
 `lz4_block` 压缩像素。
 
+自动化场景应使用 pull：`FRAME_REQUEST` 可携带 `request_id`，设备端在对应 `FRAME` 的
+`ExtData` 中原样带回，主机据此丢弃超时后迟到的旧帧，不必重建会话。push 模式下 TCP
+缓冲里排队的帧可能早于主机最近一次操作，只适合实时预览。
+
 `START.power_on_if_screen_off` 负责新连接或重新 init ARPS 时按需点亮。复用已有连接
 执行下一轮任务时，主机端应发送 `POWER_CONTROL`：
 `{"request_id":"task-start-1","keep_screen_on":true,"power_on_if_screen_off":true,"reason":"task_start"}`。
@@ -214,7 +224,7 @@ default_max_len  = 64 MiB
 `{"request_id":"task-end-1","keep_screen_on":false,"reason":"task_end"}` 释放 wake lock，不
 发送 `STOP`、不重发 `START`、不触发 `exit_power_mode`。`POWER_CONTROL` 字段缺省表示
 不改变对应状态；只带 `request_id` 时是纯状态查询，设备端通过 `POWER_STATE` 返回当前
-`screen_on`、`wake_lock_held_by_arps` 和 `display_power_override`。
+`screen_on` 和 `wake_lock_held_by_arps`。
 
 像素约定：每像素 4 字节，内存顺序按 `R, G, B, A` 解释；行寻址必须使用 `row_bytes`，
 不得假设等于 `width * 4`，但接收端必须拒绝小于 `width * 4` 的 `row_bytes`。

@@ -40,7 +40,6 @@ struct Args {
     std::string compression = "lz4_block";
     std::uint32_t max_fps = 30;
     std::uint32_t display_id = 0;
-    bool turn_screen_off = false;
     bool keep_screen_on = true;
     std::string capture_mode = "auto";
     std::string exit_power_mode = "restore_previous";
@@ -101,7 +100,7 @@ void PrintUsage(const char* argv0) {
     std::cerr
             << "Usage: " << argv0 << " [--host=127.0.0.1] [--port=27183]\n"
             << "       [--compression=raw|lz4_block] [--max-fps=30]\n"
-            << "       [--display-id=0] [--turn-screen-off=true|false]\n"
+            << "       [--display-id=0]\n"
             << "       [--keep-screen-on=true|false]\n"
             << "       [--capture-mode=auto|hardware|bitmap]\n"
             << "       [--stream-mode=push|pull]\n"
@@ -145,11 +144,6 @@ bool ParseArgs(int argc, char** argv, Args* args) {
         } else if (key == "display-id") {
             if (!ParseU32(value, &args->display_id)) {
                 std::cerr << "Invalid --display-id\n";
-                return false;
-            }
-        } else if (key == "turn-screen-off") {
-            if (!ParseBool(value, &args->turn_screen_off)) {
-                std::cerr << "Invalid --turn-screen-off\n";
                 return false;
             }
         } else if (key == "keep-screen-on") {
@@ -417,13 +411,14 @@ bool PrepareDevice(const Args& args, const std::string& apk_path) {
     return RunHostCommandOk(push, "adb push");
 }
 
-std::vector<std::string> BuildDeviceCommand(const Args& args) {
+std::vector<std::string> BuildDeviceCommand(const Args& args, const std::string& session_token) {
     std::ostringstream shell;
     shell << "CLASSPATH=" << AndroidShellQuote(args.remote_apk)
           << " app_process / com.visotc.ARPS.Main"
           << " --connect-host=127.0.0.1"
           << " --connect-port=" << args.port;
     shell << " --stream-mode=" << args.stream_mode;
+    shell << " --session-token=" << session_token;
 
     std::vector<std::string> command = AdbArgs(args);
     command.push_back("shell");
@@ -745,8 +740,7 @@ int RunGui(arps::ArpsReceiver* receiver, bool pull_mode) {
                       << " ok=" << (power.ok ? "true" : "false")
                       << " screen_on=" << (power.screen_on ? "true" : "false")
                       << " wake_lock_held_by_arps="
-                      << (power.wake_lock_held_by_arps ? "true" : "false")
-                      << " display_power_override=" << power.display_power_override;
+                      << (power.wake_lock_held_by_arps ? "true" : "false");
             if (!power.error.empty()) {
                 std::cout << " error=" << power.error;
             }
@@ -826,7 +820,9 @@ int main(int argc, char** argv) {
             RemoveReverse(args);
             return 1;
         }
-        std::vector<std::string> device_command = BuildDeviceCommand(args);
+        std::string session_token = arps::GenerateSessionToken();
+        receiver.SetExpectedSessionToken(session_token);
+        std::vector<std::string> device_command = BuildDeviceCommand(args, session_token);
         device_thread = std::thread([device_command]() {
             int rc = RunHostCommand(device_command, "adb shell");
             std::cout << "device process exited with code " << rc << "\n";
@@ -859,7 +855,6 @@ int main(int argc, char** argv) {
     start.display_id = args.display_id;
     start.compression = args.compression;
     start.max_fps = args.max_fps;
-    start.turn_screen_off = args.turn_screen_off;
     start.keep_screen_on = args.keep_screen_on;
     start.capture_mode = args.capture_mode;
     start.exit_power_mode = args.exit_power_mode;

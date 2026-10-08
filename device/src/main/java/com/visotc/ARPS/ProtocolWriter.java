@@ -27,9 +27,10 @@ final class ProtocolWriter {
     }
 
     synchronized void writeFrame(CapturedFrame frame, byte[] payload, int compressionType,
-            long frameNo, double compressMs) throws IOException {
-        byte[] base = frameBaseData(frame, payload.length, compressionType, frameNo);
-        byte[] ext = frameExtData(frame, compressionType, compressMs)
+            long frameNo, int displayId, double compressMs, String requestId)
+            throws IOException {
+        byte[] base = frameBaseData(frame, payload.length, compressionType, frameNo, displayId);
+        byte[] ext = frameExtData(frame, compressionType, compressMs, requestId)
                 .getBytes(StandardCharsets.UTF_8);
         writePacket(Protocol.TYPE_FRAME, base, payload, ext);
     }
@@ -55,7 +56,7 @@ final class ProtocolWriter {
     }
 
     private byte[] frameBaseData(CapturedFrame frame, int compressedLen, int compressionType,
-            long frameNo) {
+            long frameNo, int displayId) {
         ByteBuffer buffer = ByteBuffer.allocate(FRAME_BASE_LEN).order(ByteOrder.BIG_ENDIAN);
         buffer.putLong(frameNo);
         buffer.putLong(frame.captureTimeNs);
@@ -67,15 +68,17 @@ final class ProtocolWriter {
         buffer.putInt(compressionType);
         buffer.putInt(frame.uncompressedLen);
         buffer.putInt(compressedLen);
-        buffer.putInt(0);
+        buffer.putInt(displayId);
         buffer.putInt(frame.colorSpace);
         buffer.putInt(0);
         buffer.putInt(0);
         return buffer.array();
     }
 
-    private String frameExtData(CapturedFrame frame, int compressionType, double compressMs) {
+    private String frameExtData(CapturedFrame frame, int compressionType, double compressMs,
+            String requestId) {
         return "{"
+                + (requestId != null ? "\"request_id\":" + JSONObject.quote(requestId) + "," : "")
                 + "\"capture_api\":\"" + frame.captureApi + "\","
                 + "\"android_sdk\":" + android.os.Build.VERSION.SDK_INT + ","
                 + "\"compression\":\"" + CompressionType.nameOf(compressionType) + "\","

@@ -20,7 +20,6 @@ final class PowerController {
     private Method acquireWakeLockMethod;
     private Method releaseWakeLockMethod;
     private boolean wakeLockHeld;
-    private String displayPowerOverride = "unknown";
 
     PowerController() {
         powerManager = SystemServices.getInterface("power", "android.os.IPowerManager");
@@ -45,14 +44,6 @@ final class PowerController {
         }
         boolean ok = inputController.pressPower();
         Log.i("pressPower(display_id=" + displayId + ") result=" + ok);
-        return ok;
-    }
-
-    synchronized boolean setDisplayPower(int displayId, boolean on) {
-        boolean ok = SurfaceControlBridge.setDisplayPower(displayId, on);
-        if (ok) {
-            displayPowerOverride = on ? "on" : "off";
-        }
         return ok;
     }
 
@@ -89,41 +80,27 @@ final class PowerController {
     StateSnapshot snapshot(int displayId) {
         boolean screenOn = isScreenOn(displayId);
         synchronized (this) {
-            return new StateSnapshot(screenOn, wakeLockHeld, displayPowerOverride);
+            return new StateSnapshot(screenOn, wakeLockHeld);
         }
     }
 
     void applyExitMode(int displayId, boolean previousScreenOn, ExitPowerMode mode) {
+        boolean screenOn;
         switch (mode) {
             case KEEP_ON:
-                setDisplayPower(displayId, true);
-                if (!isScreenOn(displayId)) {
-                    pressPower(displayId);
-                    SystemClock.sleep(300);
-                }
+                screenOn = true;
                 break;
             case TURN_OFF:
-                setDisplayPower(displayId, true);
-                SystemClock.sleep(100);
-                if (isScreenOn(displayId)) {
-                    pressPower(displayId);
-                }
+                screenOn = false;
                 break;
             case RESTORE_PREVIOUS:
             default:
-                if (previousScreenOn) {
-                    setDisplayPower(displayId, true);
-                    if (!isScreenOn(displayId)) {
-                        pressPower(displayId);
-                    }
-                } else {
-                    setDisplayPower(displayId, true);
-                    SystemClock.sleep(100);
-                    if (isScreenOn(displayId)) {
-                        pressPower(displayId);
-                    }
-                }
+                screenOn = previousScreenOn;
                 break;
+        }
+        if (isScreenOn(displayId) != screenOn) {
+            pressPower(displayId);
+            SystemClock.sleep(300);
         }
     }
 
@@ -251,12 +228,10 @@ final class PowerController {
     static final class StateSnapshot {
         final boolean screenOn;
         final boolean wakeLockHeld;
-        final String displayPowerOverride;
 
-        StateSnapshot(boolean screenOn, boolean wakeLockHeld, String displayPowerOverride) {
+        StateSnapshot(boolean screenOn, boolean wakeLockHeld) {
             this.screenOn = screenOn;
             this.wakeLockHeld = wakeLockHeld;
-            this.displayPowerOverride = displayPowerOverride;
         }
     }
 }

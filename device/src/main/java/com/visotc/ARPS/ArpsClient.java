@@ -139,7 +139,7 @@ final class ArpsClient {
         try {
             while (!stopRequested) {
                 long loopStartNs = SystemClock.elapsedRealtimeNanos();
-                writeNextFrame(capturer, state);
+                writeNextFrame(capturer, state, null);
 
                 if (frameIntervalNs > 0) {
                     long elapsedNs = SystemClock.elapsedRealtimeNanos() - loopStartNs;
@@ -159,7 +159,7 @@ final class ArpsClient {
         while (!stopRequested) {
             ProtocolReader.Packet request = reader.readPacket(options.maxPacketLen);
             if (request.type == Protocol.TYPE_FRAME_REQUEST) {
-                writeNextFrame(capturer, state);
+                writeNextFrame(capturer, state, frameRequestId(request));
             } else if (request.type == Protocol.TYPE_POWER_CONTROL) {
                 applyPowerControl(request);
             } else if (request.type == Protocol.TYPE_STOP) {
@@ -264,12 +264,6 @@ final class ArpsClient {
             throw new IllegalArgumentException(
                     "screen_interactive must be \"on\" or \"off\"");
         }
-        control.displayPower = optionalString(json, "display_power");
-        if (control.displayPower != null
-                && !"on".equals(control.displayPower)
-                && !"off".equals(control.displayPower)) {
-            throw new IllegalArgumentException("display_power must be \"on\" or \"off\"");
-        }
         return control;
     }
 
@@ -292,10 +286,6 @@ final class ArpsClient {
             powerController.pressPower(control.displayId);
             SystemClock.sleep(500);
         }
-        if ("on".equals(control.displayPower)
-                && !powerController.setDisplayPower(control.displayId, true)) {
-            throw new IOException("setDisplayPower(on) failed");
-        }
         if ("on".equals(control.screenInteractive)
                 && !powerController.isScreenOn(control.displayId)) {
             powerController.pressPower(control.displayId);
@@ -305,10 +295,6 @@ final class ArpsClient {
                 && powerController.isScreenOn(control.displayId)) {
             powerController.pressPower(control.displayId);
             SystemClock.sleep(300);
-        }
-        if ("off".equals(control.displayPower)
-                && !powerController.setDisplayPower(control.displayId, false)) {
-            throw new IOException("setDisplayPower(off) failed");
         }
         if (control.hasKeepScreenOn && control.keepScreenOn) {
             if (!powerController.isScreenOn(control.displayId)) {
@@ -337,7 +323,6 @@ final class ArpsClient {
             json.put("screen_on", snapshot.screenOn);
             json.put("previous_screen_on", previousScreenOn);
             json.put("wake_lock_held_by_arps", snapshot.wakeLockHeld);
-            json.put("display_power_override", snapshot.displayPowerOverride);
             w.writeJson(Protocol.TYPE_POWER_STATE, json);
         } catch (Throwable e) {
             Log.e("POWER_STATE failed", e);
@@ -357,19 +342,22 @@ final class ArpsClient {
         boolean keepScreenOn;
         boolean powerOnIfScreenOff;
         String screenInteractive;
-        String displayPower;
     }
 
-    private void writeNextFrame(ScreenCapturer capturer, StreamState state) throws Exception {
+    private static String frameRequestId(ProtocolReader.Packet request) throws Exception {
+        if (request.ext.length == 0) {
+            return null;
+        }
+        JSONObject json = new JSONObject(new String(request.ext, StandardCharsets.UTF_8));
+        return optionalString(json, "request_id");
+    }
+
+    private void writeNextFrame(ScreenCapturer capturer, StreamState state, String requestId)
+            throws Exception {
         PreparedFrame prepared = captureAndCompress(capturer);
         state.frameNo++;
         writer.writeFrame(prepared.frame, prepared.payload, options.compressionType,
-                state.frameNo, prepared.compressMs);
-
-        if (!state.displayPowerOff && options.turnScreenOff) {
-            state.displayPowerOff = powerController.setDisplayPower(options.displayId, false);
-            Log.i("setDisplayPower(false) result=" + state.displayPowerOff);
-        }
+                state.frameNo, options.displayId, prepared.compressMs, requestId);
     }
 
     private PreparedFrame captureAndCompress(ScreenCapturer capturer) throws Exception {
@@ -403,6 +391,10 @@ final class ArpsClient {
 
     private JSONObject buildHello() throws Exception {
         JSONObject root = new JSONObject();
+        root.put("arps_version", BuildConfig.VERSION_NAME);
+        if (!options.sessionToken.isEmpty()) {
+            root.put("session_token", options.sessionToken);
+        }
         JSONObject device = new JSONObject();
         device.put("manufacturer", Build.MANUFACTURER);
         device.put("brand", Build.BRAND);
@@ -418,13 +410,13 @@ final class ArpsClient {
         capabilities.put("max_packet_len", options.maxPacketLen);
         capabilities.put("native_lz4", true);
         capabilities.put("stream_modes", new JSONArray().put("push").put("pull"));
+        capabilities.put("frame_request_id", true);
         capabilities.put("runtime_power_control",
                 new JSONArray().put("keep_screen_on")
                         .put("power_on_if_screen_off")
                         .put("request_id")
                         .put("power_state")
-                        .put("screen_interactive")
-                        .put("display_power"));
+                        .put("screen_interactive"));
         root.put("capabilities", capabilities);
         return root;
     }
@@ -522,6 +514,5 @@ final class ArpsClient {
 
     private static final class StreamState {
         long frameNo;
-        boolean displayPowerOff;
     }
 }

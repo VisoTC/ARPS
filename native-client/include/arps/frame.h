@@ -39,6 +39,7 @@ struct ArpsFrame {
     std::size_t argb8888_len = 0;
     std::size_t bitmap_payload_len = 0;
     std::string ext_json;
+    std::string request_id;
     ArpsDeviceTimings device_timings;
     double packet_read_ms = -1.0;
     double decode_ms = -1.0;

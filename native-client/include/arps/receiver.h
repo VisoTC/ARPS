@@ -18,11 +18,10 @@ struct ArpsStartOptions {
     std::uint32_t max_fps = 30;
     std::uint32_t max_packet_len = kDefaultMaxPacketLen;
     bool power_on_if_screen_off = true;
-    bool turn_screen_off = false;
     bool keep_screen_on = true;
     std::string capture_mode = "auto";
     std::string exit_power_mode = "restore_previous";
-    std::string stream_mode = "push";
+    std::string stream_mode = "pull";
 
     std::string ToJson() const;
 };
@@ -34,7 +33,6 @@ struct ArpsPowerControlOptions {
     std::optional<bool> keep_screen_on;
     std::optional<bool> power_on_if_screen_off;
     std::optional<std::string> screen_interactive;
-    std::optional<std::string> display_power;
 
     std::string ToJson() const;
 };
@@ -48,7 +46,6 @@ struct ArpsPowerState {
     bool screen_on = false;
     bool previous_screen_on = false;
     bool wake_lock_held_by_arps = false;
-    std::string display_power_override = "unknown";
 };
 
 enum class ArpsReadStatus {
@@ -70,8 +67,13 @@ struct ArpsReadResult {
     std::string json;
     std::string message;
     std::uint16_t packet_type = 0;
+    std::uint16_t protocol_major = 0;
+    std::uint16_t protocol_minor = 0;
     std::uint32_t sequence = 0;
 };
+
+// 生成用于 --session-token 的随机令牌；设备端会在 HELLO 中原样带回。
+std::string GenerateSessionToken();
 
 class ArpsReceiver {
 public:
@@ -86,6 +88,9 @@ public:
     bool AdoptConnectedSocket(ArpsSocket socket, std::string* error);
     bool SendStart(const ArpsStartOptions& options, std::string* error);
     bool RequestFrame(std::string* error);
+    bool RequestFrame(const std::string& request_id, std::string* error);
+    // 非空时，ReadNext() 收到的 HELLO 必须携带相同的 session_token，否则返回 ProtocolError。
+    void SetExpectedSessionToken(std::string token);
     bool SendPowerControl(const ArpsPowerControlOptions& options, std::string* error);
     bool RequestPowerState(const std::string& request_id, std::string* error);
     bool SendPowerControl(bool keep_screen_on, bool power_on_if_screen_off,
@@ -102,6 +107,7 @@ private:
     ArpsSocket client_socket_ = kInvalidArpsSocket;
     std::uint32_t max_packet_len_ = kDefaultMaxPacketLen;
     std::uint32_t next_sequence_ = 1;
+    std::string expected_session_token_;
     std::mutex write_mutex_;
 
     bool SendControlPacket(std::uint16_t type, const std::string& ext, std::string* error);

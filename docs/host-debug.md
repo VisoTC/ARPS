@@ -78,6 +78,9 @@ host-debug/cli/build/arps-host-debug \
   --compression=lz4_block
 ```
 
+带 `--serial` 自动启动设备端时，CLI 会生成随机会话令牌，通过 `--session-token` 传给
+设备端，并校验 `HELLO.session_token`；只监听模式不校验令牌。
+
 Windows 上也可以使用 TCP adb serial，例如：
 
 ```powershell
@@ -105,7 +108,6 @@ host-debug\build-win\Release\arps-host-debug.exe `
 - `--compression=raw|lz4_block`
 - `--max-fps=30`
 - `--display-id=0`
-- `--turn-screen-off=true|false`
 - `--keep-screen-on=true|false`
 - `--capture-mode=auto|hardware|bitmap`
 - `--stream-mode=push|pull`
@@ -170,7 +172,8 @@ host-debug/mock-source/build/arps-mock-source \
 - 发送 `START`。
 - 等待并打印 `READY`。
 - push 模式读取指定数量的 `FRAME`。
-- pull 模式逐次发送 `FRAME_REQUEST` 并读取对应 `FRAME`。
+- pull 模式逐次发送带 `request_id` 的 `FRAME_REQUEST`，读取对应 `FRAME` 并检查
+  `ExtData.request_id` 是否一致。
 - 打印 `FRAME BaseData` 元数据和 `ExtData`。
 - 可选保存最后一个压缩 payload。
 

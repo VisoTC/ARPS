@@ -12,11 +12,11 @@ final class Options {
     int maxFps = 30;
     int maxPacketLen = DEFAULT_MAX_PACKET_LEN;
     boolean powerOnIfScreenOff = true;
-    boolean turnScreenOff = false;
     boolean keepScreenOn = true;
     CaptureMode captureMode = CaptureMode.AUTO;
     ExitPowerMode exitPowerMode = ExitPowerMode.RESTORE_PREVIOUS;
     int streamMode = StreamMode.PUSH;
+    String sessionToken = "";
 
     static Options parse(String[] args) {
         Options options = new Options();
@@ -62,9 +62,6 @@ final class Options {
         if (json.has("power_on_if_screen_off")) {
             powerOnIfScreenOff = json.optBoolean("power_on_if_screen_off", powerOnIfScreenOff);
         }
-        if (json.has("turn_screen_off")) {
-            turnScreenOff = json.optBoolean("turn_screen_off", turnScreenOff);
-        }
         if (json.has("keep_screen_on")) {
             keepScreenOn = json.optBoolean("keep_screen_on", keepScreenOn);
         }
@@ -103,9 +100,6 @@ final class Options {
             case "power-on-if-screen-off":
                 powerOnIfScreenOff = parseBoolean(key, value);
                 break;
-            case "turn-screen-off":
-                turnScreenOff = parseBoolean(key, value);
-                break;
             case "keep-screen-on":
                 keepScreenOn = parseBoolean(key, value);
                 break;
@@ -117,6 +111,9 @@ final class Options {
                 break;
             case "stream-mode":
                 streamMode = StreamMode.parse(value);
+                break;
+            case "session-token":
+                sessionToken = value;
                 break;
             default:
                 throw new IllegalArgumentException("Unknown argument: --" + key);
@@ -134,6 +131,9 @@ final class Options {
         if (maxPacketLen < 1024 || maxPacketLen > DEFAULT_MAX_PACKET_LEN) {
             throw new IllegalArgumentException("max_packet_len must be in 1024.."
                     + DEFAULT_MAX_PACKET_LEN);
+        }
+        if (!sessionToken.matches("[A-Za-z0-9_-]{0,128}")) {
+            throw new IllegalArgumentException("session_token must match [A-Za-z0-9_-]{0,128}");
         }
         validateSupportedCompression(compressionType);
     }
@@ -170,6 +170,6 @@ final class Options {
                 + "[--compression=raw|lz4_block] [--max-fps=30] "
                 + "[--keep-screen-on=true|false] "
                 + "[--capture-mode=auto|hardware|bitmap] "
-                + "[--stream-mode=push|pull]";
+                + "[--stream-mode=push|pull] [--session-token=<token>]";
     }
 }

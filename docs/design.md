@@ -1,13 +1,14 @@
 # ARPS 项目设计
 
 本文档是 ARPS 的统一设计说明，面向后续维护者和最终接入开发者。内容覆盖项目目标、
-架构边界、运行形态、设备端与主机端职责，以及当前二进制协议 v1.1。
+架构边界、运行形态、设备端与主机端职责，以及当前二进制协议 v1.2。
 
 ## 项目定位
 
 ARPS 是一个 Android 屏幕原始帧采集组件。设备端通过 `app_process` 在 Android
 shell 环境运行，不安装为普通应用；它采集主显示屏的 `ARGB_8888` 原始像素，经 LZ4
-压缩后，通过 adb reverse/TCP 主动连接主机并推送连续帧。
+压缩后，通过 adb reverse/TCP 主动连接主机。主要工作模式是 pull：主机每发一次
+`FRAME_REQUEST`，设备端现场采集一帧并返回；push（连续推流）只用于实时预览和调试。
 
 项目首要目标不是提供完整投屏工具，而是为 C++ 自动化框架提供稳定、低依赖、可嵌入
 的屏幕帧输入。
@@ -20,7 +21,7 @@ shell 环境运行，不安装为普通应用；它采集主显示屏的 `ARGB_8
 - 设备端通过 `app_process` 启动，不安装 apk，不保留 Activity/UI。
 - 主机端以 C++ `native-client` 作为最终集成边界。
 - 通过明确协议承载帧数据、控制消息、错误消息和未来扩展字段。
-- 支持启动时点亮屏幕、运行期控制/查询电源状态、可选关闭物理屏幕输出、退出时恢复或设置屏幕状态。
+- 支持启动时点亮屏幕、运行期控制/查询电源状态、退出时恢复或设置屏幕状态。
 
 ## 非目标
 
@@ -30,6 +31,9 @@ shell 环境运行，不安装为普通应用；它采集主显示屏的 `ARGB_8
 - 不依赖安装后的 Android package 路径。
 - 不把调试构建产物、临时截图或采集样例作为项目基线的一部分。
 - 不实现纯 Java LZ4 回退；native 加载失败时应暴露真实失败并修复 native 链路。
+- 不提供"采集期间关闭物理屏幕输出"（`SurfaceControl.setDisplayPowerMode`）。该能力的
+  恢复依赖设备端进程正常退出，进程被 SIGKILL、OOM 或崩溃时屏幕可能停留在关闭状态；
+  各厂商 ROM 的行为也难以覆盖测试。协议 v1.2 起移除。
 
 ## 目录边界
 
@@ -64,8 +68,11 @@ arps-device.apk
 
 ```bash
 adb push arps-device.apk /data/local/tmp/arps-device.apk
-adb shell CLASSPATH=/data/local/tmp/arps-device.apk app_process / com.visotc.ARPS.Main --connect-port=27183
+adb shell CLASSPATH=/data/local/tmp/arps-device.apk app_process / com.visotc.ARPS.Main --connect-port=27183 --session-token=<token>
 ```
+
+`--session-token` 可选，取值限定为 `[A-Za-z0-9_-]{0,128}`。设备端在 `HELLO` 中原样
+带回，主机据此确认连上来的是自己启动的设备端进程。
 
 Gradle Wrapper 需要随仓库提交：
 
@@ -88,7 +95,7 @@ Wrapper 不是构建产物。它固定构建入口和 Gradle 版本，使 Orb De
 6. 按启动参数处理屏幕电源状态。
 7. 执行一次采集和压缩预热，丢弃预热帧。
 8. 发送 `READY`。
-9. 根据 `stream_mode` 连续发送 `FRAME`，或等待 `FRAME_REQUEST` 后发送一帧。
+9. 根据 `stream_mode` 等待 `FRAME_REQUEST` 后发送一帧（pull），或连续发送 `FRAME`（push）。
 10. 连接关闭、写失败或收到停止请求后清理退出。
 
 设备端只负责采集、压缩、封包和屏幕电源处理。它不提供 UI，不持有业务状态，也不把
@@ -99,9 +106,11 @@ Wrapper 不是构建产物。它固定构建入口和 Gradle 版本，使 Orb De
 `native-client` 是最终集成边界。它负责：
 
 - 监听或接管已连接 socket。
+- 可选校验 `HELLO.session_token`（`SetExpectedSessionToken()`）。
 - 发送 `START` 配置。
 - 等待设备端 `READY`。
-- 在 pull 模式下发送 `FRAME_REQUEST`。
+- 在 pull 模式下发送 `FRAME_REQUEST`，可携带 `request_id` 并从 `ArpsFrame.request_id`
+  读回。
 - 在复用连接时发送运行期 `POWER_CONTROL` 并读取 `POWER_STATE`。
 - 读取 ARPS packet。
 - 校验协议字段。
@@ -124,14 +133,19 @@ device -> HELLO
 host   -> START
 device warmup capture/compress discard
 device -> READY
-push: device -> FRAME...
 pull: host -> FRAME_REQUEST, device -> FRAME
+push: device -> FRAME...
 host   -> POWER_CONTROL
 device -> POWER_STATE
 host closes socket or device sends STOP/ERROR
 ```
 
-TCP 提供有序可靠字节流。push 模式采取串行 `capture -> compress -> write` 模型：
+TCP 提供有序可靠字节流。自动化场景应使用 pull：每帧都在收到请求后才采集，保证
+主机拿到的画面晚于它上一次操作。push 模式下 TCP 缓冲里排队的帧可能早于主机最近一次
+操作，而 `monotonic_time_ns` 属于设备时钟域，主机无法据此判断帧的新旧，所以 push 只
+适合实时预览。
+
+push 模式采取串行 `capture -> compress -> write` 模型：
 写阻塞时设备端不会继续无限制捕获新帧，从而避免内存队列堆积。`max_fps > 0` 只在
 push 模式下节流，`max_fps = 0` 表示不 sleep、尽快连续推帧。pull 模式由主机显式
 发送 `FRAME_REQUEST`，设备端每收到一次请求只采集、压缩并发送一帧。主机复用同一
@@ -143,13 +157,12 @@ push 模式下节流，`max_fps = 0` 表示不 sleep、尽快连续推帧。pull
 设备端记录连接前屏幕状态，并支持以下启动配置：
 
 - `power_on_if_screen_off`：启动时如果主屏已熄灭，注入一次 POWER 键点亮。
-- `turn_screen_off`：开始推流后尝试关闭物理屏幕输出。
 - `keep_screen_on`：推流期间通过 `IPowerManager` 的 screen WakeLock 防止系统自动熄屏。
 - `exit_power_mode`：退出时 `restore_previous`、`keep_on` 或 `turn_off`。
 
-关闭物理屏幕输出和按 POWER 键关屏不是同一层能力。前者面向“物理屏幕熄灭但采集仍
-继续”的场景；后者会改变设备实际屏幕状态。不同厂商和 Android 版本可能存在差异，
-失败时应记录真实错误和设备信息，而不是静默回退。
+所有电源动作都通过 POWER 键注入和 `IPowerManager` wake lock 完成，不直接改写显示
+输出状态。不同厂商和 Android 版本可能存在差异，失败时应记录真实错误和设备信息，而不是
+静默回退。
 
 `START.power_on_if_screen_off` 负责新连接或重新 init ARPS 时的按需点亮。复用已有
 ARPS 连接时，上一轮任务结束释放 wake lock 后，空闲期间屏幕可能再次熄灭；下一轮任
@@ -178,9 +191,9 @@ WakeLock 获取失败时设备端发送 `ERROR` 并退出；运行期 `POWER_CON
 
 `delta_lz4` 和扩展压缩类型仅保留枚举，当前实现拒绝。
 
-## 协议 v1.1
+## 协议 v1.2
 
-ARPS v1.1 运行在单条有序 TCP 连接上。所有多字节整数均使用 big-endian。协议不依赖
+ARPS v1.2 运行在单条有序 TCP 连接上。所有多字节整数均使用 big-endian。协议不依赖
 TCP EOF 划分包边界，每个包都必须通过长度字段完整读取。
 
 ### 常量
@@ -188,7 +201,7 @@ TCP EOF 划分包边界，每个包都必须通过长度字段完整读取。
 ```text
 magic            = "ARPSBYVISOTC"  # 12 bytes ASCII
 protocol_major   = 1
-protocol_minor   = 1
+protocol_minor   = 2
 fixed_header_len = 32
 default_max_len  = 64 MiB
 ```
@@ -273,6 +286,8 @@ ExtData    = UTF-8 JSON
 
 ```json
 {
+  "arps_version": "0.1.0",
+  "session_token": "<host 传入的令牌，未传入时省略>",
   "device": {
     "manufacturer": "Google",
     "brand": "google",
@@ -287,20 +302,24 @@ ExtData    = UTF-8 JSON
     "max_packet_len": 67108864,
     "native_lz4": true,
     "stream_modes": ["push", "pull"],
+    "frame_request_id": true,
     "runtime_power_control": [
       "keep_screen_on",
       "power_on_if_screen_off",
       "request_id",
       "power_state",
-      "screen_interactive",
-      "display_power"
+      "screen_interactive"
     ]
   }
 }
 ```
 
-`START` 由主机端发送，设备端收到后先完成预热，再进入指定流模式。`stream_mode`
-缺省为 `push`。`max_fps` 只在 push 模式下节流；pull 模式忽略它。
+`arps_version` 是设备端 apk 的 `versionName`，用于主机确认内置 apk 与预期版本一致。
+`session_token` 仅在启动参数传入 `--session-token` 时出现。
+
+`START` 由主机端发送，设备端收到后先完成预热，再进入指定流模式。为兼容 v1.1，START
+缺省 `stream_mode` 时设备端仍按 `push` 处理；`native-client` 的 `ArpsStartOptions`
+默认显式发送 `pull`。`max_fps` 只在 push 模式下节流；pull 模式忽略它。
 `capture_mode=hardware` 在 `lz4_block` 下使用 `ScreenCapture.captureDisplay` 返回的
 `HardwareBuffer`，直接通过 JNI 调用 NDK `AHardwareBuffer_lock` 后用同一个
 `liblz4arps.so` 压缩；`bitmap` 保留旧的 `Bitmap.copy + copyPixelsToBuffer`
@@ -315,7 +334,6 @@ ExtData    = UTF-8 JSON
   "max_fps": 30,
   "max_packet_len": 67108864,
   "power_on_if_screen_off": true,
-  "turn_screen_off": false,
   "keep_screen_on": true,
   "capture_mode": "auto",
   "exit_power_mode": "restore_previous",
@@ -339,10 +357,13 @@ push 帧或发送 pull 请求。
 ```
 
 `FRAME_REQUEST` 由主机端在 pull 模式发送。设备端每收到一个请求，只发送一个
-`FRAME`。
+`FRAME`。`request_id` 可选（v1.2）；带上时设备端在对应 `FRAME` 的 `ExtData` 中原样
+带回。主机读帧超时后可以继续用新的 `request_id` 请求，并丢弃 `request_id` 不匹配的
+迟到帧，而不必重建会话。
 
 ```json
 {
+  "request_id": "frame-42"
 }
 ```
 
@@ -358,7 +379,6 @@ push 帧或发送 pull 请求。
 - `keep_screen_on`：可选 bool，控制 ARPS 自己持有的 wake lock。
 - `power_on_if_screen_off`：可选 bool，一次性动作；为 true 且当前熄屏时注入 POWER 键点亮。
 - `screen_interactive`：可选 `"on"` 或 `"off"`，通过 POWER 键按需改变系统交互状态。
-- `display_power`：可选 `"on"` 或 `"off"`，通过 `SurfaceControl.setDisplayPowerMode` 改变显示输出。
 
 任务开始时：
 
@@ -411,19 +431,15 @@ push 帧或发送 pull 请求。
   "display_id": 0,
   "screen_on": true,
   "previous_screen_on": true,
-  "wake_lock_held_by_arps": false,
-  "display_power_override": "unknown"
+  "wake_lock_held_by_arps": false
 }
 ```
-
-`display_power_override` 只表示 ARPS 最近一次成功设置的显示输出状态，取值为
-`"on"`、`"off"` 或 `"unknown"`；它不是 Android 系统提供的真实 display power getter。
 
 `ERROR` 由设备端发送，表示设备端异常。主机端应记录并结束当前会话。
 
 ```json
 {
-  "message": "Startup refused: captured frames are still mostly black",
+  "message": "Expected START packet, got type=4",
   "type": "java.io.IOException"
 }
 ```
@@ -493,6 +509,7 @@ offset  size  field
 
 ```json
 {
+  "request_id": "frame-42",
   "capture_api": "android.window.ScreenCapture.captureDisplay+AHardwareBuffer",
   "android_sdk": 35,
   "compression": "lz4_block",
@@ -503,7 +520,7 @@ offset  size  field
 }
 ```
 
-`copy_ms` 表示设备端将像素复制进 Java `byte[]` 的耗时；direct HardwareBuffer
+`request_id` 仅在对应 `FRAME_REQUEST` 携带了 `request_id` 时出现。`copy_ms` 表示设备端将像素复制进 Java `byte[]` 的耗时；direct HardwareBuffer
 路径不需要这一步，因此为 0。`lock_ms` 仅在 direct HardwareBuffer 路径出现，
 表示 native 侧锁定 `AHardwareBuffer` 供 CPU 读取的耗时。
 
@@ -543,6 +560,19 @@ device -> host 包，会作为 `ArpsReadStatus::PowerState` 返回。
 - 修改 FixedHeader 布局。
 - 改变当前已定义字段的字节序、大小或语义。
 - 改变 body 中 `base_len + base + bitmap_len + bitmap + ext_len + ext` 的已知前缀顺序。
+
+## 版本历史
+
+- **v1.2**
+  - `FRAME_REQUEST` 新增可选 `request_id`，设备端在 `FRAME.ExtData.request_id` 中带回；
+    `HELLO.capabilities.frame_request_id = true` 表示支持。
+  - `HELLO` 新增 `arps_version`，以及可选 `session_token`（对应启动参数 `--session-token`）。
+  - `FRAME.BaseData.display_id` 改为写入实际的 display id（v1.1 设备端固定写 0）。
+  - 移除 `START.turn_screen_off`、`POWER_CONTROL.display_power` 和
+    `POWER_STATE.display_power_override`，`HELLO.capabilities.runtime_power_control` 不再
+    包含 `display_power`。这是对兼容性规则的一次显式例外：v1.2 设备端会忽略旧主机发来的
+    这些字段，不会报错；主机应根据 `HELLO` 能力列表判断是否支持。
+- **v1.1**：新增 pull 模式、`READY`、运行期 `POWER_CONTROL` / `POWER_STATE`。
 
 ## 已知限制
 

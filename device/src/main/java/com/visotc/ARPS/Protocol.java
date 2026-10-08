@@ -5,7 +5,7 @@ import java.nio.charset.StandardCharsets;
 final class Protocol {
     static final byte[] MAGIC = "ARPSBYVISOTC".getBytes(StandardCharsets.US_ASCII);
     static final int MAJOR = 1;
-    static final int MINOR = 1;
+    static final int MINOR = 2;
     static final int HEADER_LEN = 32;
 
     static final int TYPE_HELLO = 1;
